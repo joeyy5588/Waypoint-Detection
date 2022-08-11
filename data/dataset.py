@@ -13,7 +13,10 @@ class Panorama_Dataset:
         self.img_fn_list = []
         for n in os.listdir(root_dir):
             for trial in os.listdir(os.path.join(root_dir, n)):
-                traj_data = json.load(open(os.path.join(root_dir, n, trial, 'traj.json')))
+                try:
+                    traj_data = json.load(open(os.path.join(root_dir, n, trial, 'traj.json')))
+                except:
+                    continue
                 for nav_point in traj_data["navigation_point"]:
                     self.traj_list.append(traj_data)
                     self.img_fn_list.append(os.path.join(root_dir, n, trial, 'images', str(nav_point).zfill(9) + '.png'))
