@@ -51,8 +51,8 @@ class Panorama_Dataset:
             'input_rotation': input_rotation,
             'instruction': instruction,
             'target_x': target_x,
-            'target_z': target_z
-            'target_angle': target_angle
+            'target_z': target_z,
+            'target_angle': target_angle,
             'target_rotation': target_rotation
         }
         print(meta_dict)
