@@ -3,6 +3,7 @@ from transformers.models.bert.modeling_bert import BertEncoder, BertPreTrainedMo
 # from habitat_baselines.rl.ddppo.policy import resnet
 from torchvision.models import resnet50
 import torch.nn as nn
+import torch
 import clip
 
 class Waypoint_Predictor(nn.Module):
@@ -32,8 +33,9 @@ class Panoramic_Embeddings(nn.Module):
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, input_coord, input_angle, input_rotation):
-        embeddings = self.coord_embedding(input_coord) + self.angle_embedding(input_angle) + self.rotation_embedding(input_rotation)
+    def forward(self, input_angle, input_rotation):
+        # embeddings = self.coord_embedding(input_coord) + self.angle_embedding(input_angle) + self.rotation_embedding(input_rotation)
+        embeddings = self.angle_embedding(input_angle) + self.rotation_embedding(input_rotation)
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
@@ -140,34 +142,42 @@ class Waypoint_Transformer(BertPreTrainedModel):
         self.config = config
 
         self.text_embeddings = BertEmbeddings(config)
-        self.image_embeddings = Panoramic_Embeddings()
+        self.image_embeddings = Panoramic_Embeddings(config)
         self.encoder = BertEncoder(config)
         self.pooler = BertPooler(config)
         self.classifier = Waypoint_Predictor(config)
         self.post_init()
 
-        self.rgb_resnet = clip.load("RN50")[0]
-        self.depth_resnet = resnet50(weights="IMAGENET1K_V2")
-        self.depth_resnet.conv1 = nn.Conv2d(1, self.depth_resnet.inplanes, kernel_size=7, stride=2, padding=3, bias=False)
+        self.rgb_resnet = clip.load("RN50")[0].visual
+        self.rgb_transform = nn.Linear(1024, 768)
+        self.depth_resnet = resnet50(pretrained=True)
+        self.depth_resnet.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.depth_resnet.fc = nn.Linear(2048, 768)
 
-    def forward(self, instruction, rgb_list, depth_list, input_coord, input_angle, input_rotation):
-        input_rgb_feats = []
-        input_depth_feats = []
-        for i in range(len(rgb_list)):
-            rgb_feat = self.rgb_resnet[rgb_list[i]]
-            depth_feat = self.rgb_resnet[depth_list[i]]
-            traj_feat = self.image_embeddings(input_coord[i], input_angle[i], input_rotation[i])
-            input_rgb_feats.append(rgb_feat + traj_feat)
-            input_depth_feats.append(depth_feat + traj_feat)
+    def forward(self, input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation):
+        # input_rgb_feats = []
+        # input_depth_feats = []
+        # for i in range(len(rgb_list)):
+        #     rgb_feat = self.rgb_resnet[rgb_list[i]]
+        #     depth_feat = self.rgb_resnet[depth_list[i]]
+        #     traj_feat = self.image_embeddings(input_coord[i], input_angle[i], input_rotation[i])
+        #     input_rgb_feats.append(rgb_feat + traj_feat)
+        #     input_depth_feats.append(depth_feat + traj_feat)
+        batch_size = panorama_angle.size(0)
+        rgb_feats = self.rgb_resnet(rgb_list)
+        rgb_feats = self.rgb_transform(rgb_feats)
+        depth_feats = self.depth_resnet(depth_list)
+        traj_feat = self.image_embeddings(panorama_angle, panorama_rotation)
 
-        word_embeddings = self.text_embeddings(instruction)
-        rgb_feats = torch.stack(input_rgb_feats, dim=1)
-        depth_feats = torch.stack(input_depth_feats, dim=1)
+        word_embeddings = self.text_embeddings(input_ids['input_ids'])
+        rgb_feats = rgb_feats.reshape(batch_size, 12, -1) + traj_feat
+        depth_feats = depth_feats.reshape(batch_size, 12, -1) + traj_feat
 
         input_feats = torch.cat([word_embeddings, rgb_feats, depth_feats], dim=1)
 
-        encoded_output = self.encoder(input_feats)
+        encoder_outputs = self.encoder(input_feats)
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
         coord_logits, angle_logits, rotation_logits = self.classifier(pooled_output)
+        return (coord_logits, angle_logits, rotation_logits)

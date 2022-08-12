@@ -1,7 +1,37 @@
 import torch
 from data.dataset import Panorama_Dataset
-from transformers import TrainingArguments
+from data.collate import RGBD_Collator
+from model.model import Waypoint_Transformer
+from trainer.trainer import WaypointTrainer
+from transformers import TrainingArguments, AutoConfig
+from torch.utils.data import DataLoader
 
-train_data_dir = '/mnt/alfworld/data/panorama'
+train_data_dir = '/mnt/alfworld/data/panorama_valid_seen'
 train_dataset = Panorama_Dataset(train_data_dir)
-train_dataset.__getitem__(0)
+tokenizer = train_dataset.tokenizer
+data_collator = RGBD_Collator(tokenizer)
+# train_dataloader = DataLoader(train_dataset, batch_size=2, collate_fn=data_collator)
+config = AutoConfig.from_pretrained('bert-base-uncased')
+model = Waypoint_Transformer(config)
+
+training_args = TrainingArguments(
+    output_dir="./output",
+    evaluation_strategy="epoch",
+    learning_rate=2e-5,
+    per_device_train_batch_size=2,
+    per_device_eval_batch_size=2,
+    num_train_epochs=3,
+    weight_decay=0.01,
+)
+
+trainer = WaypointTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=train_dataset,
+    tokenizer=tokenizer,
+    data_collator=data_collator,
+)
+
+trainer.train()
+
