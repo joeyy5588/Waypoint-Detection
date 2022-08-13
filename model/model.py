@@ -1,10 +1,9 @@
 from transformers.models.bert.modeling_bert import BertEncoder, BertPreTrainedModel, BertEmbeddings, BertPooler
 # from habitat_baselines.rl.ddppo.policy.resnet_policy import ResNetEncoder
 # from habitat_baselines.rl.ddppo.policy import resnet
-from torchvision.models import resnet50
+from .resnet import RGB_ResNet, Depth_ResNet
 import torch.nn as nn
 import torch
-import clip
 
 class Waypoint_Predictor(nn.Module):
     def __init__(self, config):
@@ -148,11 +147,9 @@ class Waypoint_Transformer(BertPreTrainedModel):
         self.classifier = Waypoint_Predictor(config)
         self.post_init()
 
-        self.rgb_resnet = clip.load("RN50")[0].visual
-        self.rgb_transform = nn.Linear(1024, 768)
-        self.depth_resnet = resnet50(pretrained=True)
-        self.depth_resnet.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.depth_resnet.fc = nn.Linear(2048, 768)
+        self.rgb_resnet = RGB_ResNet()
+        self.depth_resnet = Depth_ResNet(config)
+        
 
     def forward(self, input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation):
         # input_rgb_feats = []
@@ -163,9 +160,12 @@ class Waypoint_Transformer(BertPreTrainedModel):
         #     traj_feat = self.image_embeddings(input_coord[i], input_angle[i], input_rotation[i])
         #     input_rgb_feats.append(rgb_feat + traj_feat)
         #     input_depth_feats.append(depth_feat + traj_feat)
+
+        # Dataparallel will split 
         batch_size = panorama_angle.size(0)
+        # B * 12 * D -> (B*12) * D
         rgb_feats = self.rgb_resnet(rgb_list)
-        rgb_feats = self.rgb_transform(rgb_feats)
+        print(rgb_feats.size(), panorama_angle.size())
         depth_feats = self.depth_resnet(depth_list)
         traj_feat = self.image_embeddings(panorama_angle, panorama_rotation)
 

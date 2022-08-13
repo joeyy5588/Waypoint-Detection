@@ -49,7 +49,7 @@ class Panorama_Dataset:
         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
     def __len__(self):
-        return len(self.img_fn_list)
+        return len(self.img_fn_list) // 50
 
     def __getitem__(self, idx):
         img_path = self.img_fn_list[idx]

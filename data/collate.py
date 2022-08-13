@@ -27,8 +27,8 @@ class RGBD_Collator:
             padding=self.padding,
             return_tensors=self.return_tensors,
         )
-        rgb_list = torch.cat(rgb_list, dim=0)
-        depth_list = torch.cat(depth_list, dim=0)
+        rgb_list = torch.stack(rgb_list, dim=0)
+        depth_list = torch.stack(depth_list, dim=0)
 
         meta_dict = {
             'panorama_angle': torch.stack(panorama_angle, dim=0),
