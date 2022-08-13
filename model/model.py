@@ -140,7 +140,7 @@ class Waypoint_Transformer(BertPreTrainedModel):
         super().__init__(config)
         self.config = config
 
-        self.text_embeddings = BertEmbeddings(config)
+        self.embeddings = BertEmbeddings(config)
         self.image_embeddings = Panoramic_Embeddings(config)
         self.encoder = BertEncoder(config)
         self.pooler = BertPooler(config)
@@ -169,7 +169,7 @@ class Waypoint_Transformer(BertPreTrainedModel):
         depth_feats = self.depth_resnet(depth_list)
         traj_feat = self.image_embeddings(panorama_angle, panorama_rotation)
 
-        word_embeddings = self.text_embeddings(input_ids['input_ids'])
+        word_embeddings = self.embeddings(input_ids['input_ids'])
         rgb_feats = rgb_feats.reshape(batch_size, 12, -1) + traj_feat
         depth_feats = depth_feats.reshape(batch_size, 12, -1) + traj_feat
 
