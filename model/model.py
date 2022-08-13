@@ -4,6 +4,7 @@ from transformers.models.bert.modeling_bert import BertEncoder, BertPreTrainedMo
 from .resnet import RGB_ResNet, Depth_ResNet
 import torch.nn as nn
 import torch
+import numpy as np
 
 class Waypoint_Predictor(nn.Module):
     def __init__(self, config):
@@ -12,16 +13,21 @@ class Waypoint_Predictor(nn.Module):
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
         self.dropout = nn.Dropout(classifier_dropout)
-        self.coord_classifier = nn.Linear(config.hidden_size, 2)
+        # For regression
+        # self.coord_classifier = nn.Linear(config.hidden_size, 2)
+        # For discretized distance (classification)
+        self.coord_classifier_x = nn.Linear(config.hidden_size, 65)
+        self.coord_classifier_z = nn.Linear(config.hidden_size, 65)
         self.angle_classifier = nn.Linear(config.hidden_size, 13)
         self.rotation_classifier = nn.Linear(config.hidden_size, 4)
 
     def forward(self, pooled_output):
         pooled_output = self.dropout(pooled_output)
-        coord_logits = self.coord_classifier(pooled_output)
+        coord_logits_x = self.coord_classifier_x(pooled_output)
+        coord_logits_z = self.coord_classifier_x(pooled_output)
         angle_logits = self.angle_classifier(pooled_output)
         rotation_logits = self.rotation_classifier(pooled_output)
-        return coord_logits, angle_logits, rotation_logits
+        return coord_logits_x, coord_logits_z, angle_logits, rotation_logits
 
 class Panoramic_Embeddings(nn.Module):
     def __init__(self, config):
@@ -145,10 +151,13 @@ class Waypoint_Transformer(BertPreTrainedModel):
         self.encoder = BertEncoder(config)
         self.pooler = BertPooler(config)
         self.classifier = Waypoint_Predictor(config)
+        self.merge_visual_mlp = nn.Linear(config.hidden_size*2, config.hidden_size)
         self.post_init()
 
-        self.rgb_resnet = RGB_ResNet()
+        self.rgb_resnet = RGB_ResNet(config)
         self.depth_resnet = Depth_ResNet(config)
+        
+        self.softmax = nn.Softmax(dim=-1)
         
 
     def forward(self, input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation):
@@ -165,19 +174,27 @@ class Waypoint_Transformer(BertPreTrainedModel):
         batch_size = panorama_angle.size(0)
         # B * 12 * D -> (B*12) * D
         rgb_feats = self.rgb_resnet(rgb_list)
-        print(rgb_feats.size(), panorama_angle.size())
         depth_feats = self.depth_resnet(depth_list)
         traj_feat = self.image_embeddings(panorama_angle, panorama_rotation)
 
         word_embeddings = self.embeddings(input_ids['input_ids'])
-        rgb_feats = rgb_feats.reshape(batch_size, 12, -1) + traj_feat
-        depth_feats = depth_feats.reshape(batch_size, 12, -1) + traj_feat
+        rgb_feats = rgb_feats.reshape(batch_size, 12, -1)
+        depth_feats = depth_feats.reshape(batch_size, 12, -1)
+        merged_visual_feats = self.merge_visual_mlp(torch.cat([rgb_feats, depth_feats], dim=-1))
 
-        input_feats = torch.cat([word_embeddings, rgb_feats, depth_feats], dim=1)
-
+        input_feats = torch.cat([word_embeddings, merged_visual_feats], dim=1)
         encoder_outputs = self.encoder(input_feats)
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
-        coord_logits, angle_logits, rotation_logits = self.classifier(pooled_output)
+        coord_logits_x, coord_logits_z, angle_logits, rotation_logits = self.classifier(pooled_output)
+        coord_logits_x = self.softmax(coord_logits_x)
+        distance_bins = torch.tensor(np.linspace(-8,8,65), device=coord_logits_x.device)
+        coord_logits_x = torch.sum(coord_logits_x * distance_bins, dim=-1)
+        coord_logits_z = self.softmax(coord_logits_z)
+        distance_bins = torch.tensor(np.linspace(-8,8,65), device=coord_logits_z.device)
+        coord_logits_z = torch.sum(coord_logits_z * distance_bins, dim=-1)
+        coord_logits = torch.stack([coord_logits_x, coord_logits_z],dim=1)
+        
+
         return (coord_logits, angle_logits, rotation_logits)

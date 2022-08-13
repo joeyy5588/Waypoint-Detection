@@ -2,6 +2,7 @@ from torch import nn
 from transformers import Trainer
 import torch
 from tqdm import tqdm
+from .loss import SILogLoss
 
 class WaypointTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
@@ -14,13 +15,14 @@ class WaypointTrainer(Trainer):
         coord_logits, angle_logits, rotation_logits = outputs
 
         ce_loss = nn.CrossEntropyLoss()
-        mse_loss = nn.MSELoss()
-        l1_loss = nn.L1Loss()
-
-        coord_loss = l1_loss(coord_logits.view(-1), target_coord.view(-1))
+        # mse_loss = nn.MSELoss()
+        # l1_loss = nn.L1Loss()
+        distance_loss = SILogLoss()
+        alpha = 10
+        coord_loss = alpha * distance_loss(coord_logits.view(-1), target_coord.view(-1))
         angle_loss = ce_loss(angle_logits.view(-1, angle_logits.size(-1)), target_angle)
         rotation_loss = ce_loss(rotation_logits.view(-1, rotation_logits.size(-1)), target_rotation)
-
+        print(coord_loss, angle_loss, rotation_loss)
         loss = coord_loss + angle_loss + rotation_loss
 
         return (loss, outputs) if return_outputs else loss
