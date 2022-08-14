@@ -26,6 +26,7 @@ training_args = TrainingArguments(
     num_train_epochs=3,
     weight_decay=0.0001,
     logging_steps=20,
+    report_to='tensorboard'
 )
 
 trainer = WaypointTrainer(
