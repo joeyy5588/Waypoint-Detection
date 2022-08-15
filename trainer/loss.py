@@ -8,8 +8,6 @@ class SILogLoss(nn.Module):  # Main loss function used in AdaBins paper
         self.eps = 0.001
 
     def forward(self, input, target,):
-        input = input + 8
-        target = target + 8
         g = torch.log(input+self.eps) - torch.log(target+self.eps)
         # n, c, h, w = g.shape
         # norm = 1/(h*w)

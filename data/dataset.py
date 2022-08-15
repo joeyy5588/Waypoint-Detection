@@ -9,6 +9,7 @@ try:
 except ImportError:
     BICUBIC = Image.BICUBIC
 
+import math
 import os
 import json
 
@@ -20,8 +21,32 @@ def _to_tensor(image, mode):
     image = ToTensor()(image)
     return image
 
+def azimuthAngle(x1,  y1,  x2,  y2):
+    angle = 0.0
+    dx = x2 - x1
+    dy = y2 - y1
+    if  x2 == x1:
+        angle = math.pi / 2.0
+        if  y2 == y1 :
+            angle = 0.0
+        elif y2 < y1 :
+            angle = 3.0 * math.pi / 2.0
+    elif x2 > x1 and y2 > y1:
+        angle = math.atan(dx / dy)
+    elif  x2 > x1 and  y2 < y1 :
+        angle = math.pi / 2 + math.atan(-dy / dx)
+    elif  x2 < x1 and y2 < y1 :
+        angle = math.pi + math.atan(dx / dy)
+    elif  x2 < x1 and y2 > y1 :
+        angle = 3.0 * math.pi / 2.0 + math.atan(dy / -dx)
+    return (angle * 180 / math.pi)
+
+
 class Panorama_Dataset:
-    def __init__(self, root_dir):
+    def __init__(self, root_dir, predict_xyz=True):
+        '''
+            predict_xyz: predict xyz coordinate or polar coordinate
+        '''
         self.root_dir = root_dir
         self.img_transform = Compose([
             Resize(224, interpolation=BICUBIC),
@@ -47,6 +72,8 @@ class Panorama_Dataset:
                     self.img_fn_list.append(os.path.join(root_dir, n, trial, 'images', str(nav_point).zfill(9) + '.png'))
 
         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+
+        self.predict_xyz = predict_xyz
 
     def __len__(self):
         return len(self.img_fn_list)
@@ -81,6 +108,9 @@ class Panorama_Dataset:
         elif input_rotation == 270:
             target_x = delta_z
             target_z = -delta_x
+
+        delta_angle = azimuthAngle(0,0,target_x, target_z)
+        delta_length = math.sqrt(target_x ** 2 + target_z ** 2)
 
         # delta_angle = round(traj_data['traj']['angle'][nav_point+1]) - input_angle
         target_angle = round(traj_data['traj']['angle'][nav_point+1])
@@ -117,7 +147,13 @@ class Panorama_Dataset:
         depth_list = torch.stack(depth_list, dim=0)
 
         input_coord = torch.tensor([input_x, input_z])
-        target_coord = torch.tensor([target_x, target_z])
+
+        if self.predict_xyz:
+            # need positive gt to calculate loss
+            offset = 8
+            target_coord = torch.tensor([target_x+offset, target_z+offset])
+        elif self.predict_xyz:
+            target_coord = torch.tensor([delta_length, delta_angle])
 
         # 30, 0, -30
         panorama_angle = torch.LongTensor([8,8,8,8,6,6,6,6,4,4,4,4])

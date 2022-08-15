@@ -7,7 +7,7 @@ import torch
 import numpy as np
 
 class Waypoint_Predictor(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, coord1_classes, coord2_classes):
         super().__init__()
         classifier_dropout = (
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
@@ -16,18 +16,22 @@ class Waypoint_Predictor(nn.Module):
         # For regression
         # self.coord_classifier = nn.Linear(config.hidden_size, 2)
         # For discretized distance (classification)
-        self.coord_classifier_x = nn.Linear(config.hidden_size, 65)
-        self.coord_classifier_z = nn.Linear(config.hidden_size, 65)
+        '''
+            For xyz: 1 = x, 2 = z
+            For polar: 1 = r, 2 = theta
+        '''
+        self.coord_classifier_1 = nn.Linear(config.hidden_size, coord1_classes)
+        self.coord_classifier_2 = nn.Linear(config.hidden_size, coord2_classes)
         self.angle_classifier = nn.Linear(config.hidden_size, 13)
         self.rotation_classifier = nn.Linear(config.hidden_size, 4)
 
     def forward(self, pooled_output):
         pooled_output = self.dropout(pooled_output)
-        coord_logits_x = self.coord_classifier_x(pooled_output)
-        coord_logits_z = self.coord_classifier_x(pooled_output)
+        coord_logits_1 = self.coord_classifier_1(pooled_output)
+        coord_logits_2 = self.coord_classifier_2(pooled_output)
         angle_logits = self.angle_classifier(pooled_output)
         rotation_logits = self.rotation_classifier(pooled_output)
-        return coord_logits_x, coord_logits_z, angle_logits, rotation_logits
+        return coord_logits_1, coord_logits_2, angle_logits, rotation_logits
 
 class Panoramic_Embeddings(nn.Module):
     def __init__(self, config):
@@ -142,23 +146,38 @@ class VlnResnetDepthEncoder(nn.Module):
             return x
 
 class Waypoint_Transformer(BertPreTrainedModel):
-    def __init__(self, config):
+    def __init__(self, config, predict_xyz=True):
         super().__init__(config)
         self.config = config
+        self.predict_xyz = predict_xyz
+
+        '''
+            For xyz: 1 = x, 2 = z range: 0 ~ 16
+            For polar: 1 = r, 2 = theta range: 0 ~ 10
+        '''
+        if predict_xyz:
+            self.coord1_classes = 65
+            self.coord2_classes = 65
+        else:
+            self.coord1_classes = 51
+            self.coord2_classes = 121
 
         self.embeddings = BertEmbeddings(config)
         self.image_embeddings = Panoramic_Embeddings(config)
         self.encoder = BertEncoder(config)
         self.pooler = BertPooler(config)
-        self.classifier = Waypoint_Predictor(config)
+        self.classifier = Waypoint_Predictor(config, self.coord1_classes, self.coord2_classes)
         self.merge_visual_mlp = nn.Linear(config.hidden_size*2, config.hidden_size)
         self.post_init()
 
         self.rgb_resnet = RGB_ResNet(config)
         self.depth_resnet = Depth_ResNet(config)
-        
-        self.softmax = nn.Softmax(dim=-1)
-        
+        if predict_xyz:
+            self.coord1_space = np.linspace(0, 16, self.coord1_classes)
+            self.coord2_space = np.linspace(0, 16, self.coord2_classes)
+        else:
+            self.coord1_space = np.linspace(0, 10, self.coord1_classes)
+            self.coord2_space = np.linspace(0, 360, self.coord2_classes)
 
     def forward(self, input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation):
         # input_rgb_feats = []
@@ -187,14 +206,23 @@ class Waypoint_Transformer(BertPreTrainedModel):
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
-        coord_logits_x, coord_logits_z, angle_logits, rotation_logits = self.classifier(pooled_output)
-        coord_logits_x = self.softmax(coord_logits_x)
-        distance_bins = torch.tensor(np.linspace(-8,8,65), device=coord_logits_x.device)
-        coord_logits_x = torch.sum(coord_logits_x * distance_bins, dim=-1)
-        coord_logits_z = self.softmax(coord_logits_z)
-        distance_bins = torch.tensor(np.linspace(-8,8,65), device=coord_logits_z.device)
-        coord_logits_z = torch.sum(coord_logits_z * distance_bins, dim=-1)
-        coord_logits = torch.stack([coord_logits_x, coord_logits_z],dim=1)
+        coord_logits_1, coord_logits_2, angle_logits, rotation_logits = self.classifier(pooled_output)
+
+        coord_logits_1 = self.softmax(coord_logits_1)
+        bin_values1 = torch.tensor(self.coord1_space, device=coord_logits_1.device)
+        coord_logits_1 = torch.sum(coord_logits_1 * bin_values1, dim=-1)
+
+        coord_logits_2 = self.softmax(coord_logits_2)
+        bin_values2 = torch.tensor(self.coord2_space, device=coord_logits_2.device)
+        coord_logits_2 = torch.sum(coord_logits_2 * bin_values2, dim=-1)
+
+        coord_logits = torch.stack([coord_logits_1, coord_logits_2],dim=1)
         
 
         return (coord_logits, angle_logits, rotation_logits)
+
+    def softmax(self, input, t=0.1):
+        nom = torch.exp(input/t)
+        denom = torch.sum(nom, dim=1).unsqueeze(1)
+        return nom / denom
+
