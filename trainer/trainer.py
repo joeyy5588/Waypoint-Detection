@@ -18,6 +18,24 @@ import math, time, os
 logger = logging.get_logger(__name__)
 
 class WaypointTrainer(Trainer):
+    def __init__(self,
+        model = None,
+        args = None,
+        data_collator = None,
+        train_dataset = None,
+        eval_dataset = None,
+        tokenizer = None,
+        model_init = None,
+        compute_metrics = None,
+        callbacks = None,
+        optimizers = (None, None),
+        preprocess_logits_for_metrics = None,
+        predict_xyz = True):
+        super().__init__(model, args, data_collator, train_dataset, eval_dataset, tokenizer,\
+        model_init, compute_metrics, callbacks, optimizers, preprocess_logits_for_metrics)
+
+        self.predict_xyz = predict_xyz
+
     def training_step(self, model, inputs):
         model.train()
         inputs = self._prepare_inputs(inputs)
@@ -63,15 +81,28 @@ class WaypointTrainer(Trainer):
         # l1_loss = nn.L1Loss()
         distance_loss = SILogLoss()
         alpha = 10
-        coord_loss = alpha * distance_loss(coord_logits.view(-1), target_coord.view(-1))
-        angle_loss = ce_loss(angle_logits.view(-1, angle_logits.size(-1)), target_angle)
-        rotation_loss = ce_loss(rotation_logits.view(-1, rotation_logits.size(-1)), target_rotation)
-        loss = coord_loss + angle_loss + rotation_loss
-        loss_metric = {
-            "coord_loss": coord_loss.item(),
-            "angle_loss": angle_loss.item(),
-            "rotation_loss": rotation_loss.item()
-        }
+        if self.predict_xyz:
+            coord_loss = alpha * distance_loss(coord_logits.view(-1), target_coord.view(-1))
+            angle_loss = ce_loss(angle_logits.view(-1, angle_logits.size(-1)), target_angle)
+            rotation_loss = ce_loss(rotation_logits.view(-1, rotation_logits.size(-1)), target_rotation)
+            loss = coord_loss + angle_loss + rotation_loss
+            loss_metric = {
+                "coord_loss": coord_loss.item(),
+                "angle_loss": angle_loss.item(),
+                "rotation_loss": rotation_loss.item()
+            }
+        else:
+            radius_loss = alpha * distance_loss(coord_logits[:,0], target_coord[:,0])
+            azimuth_loss = alpha * distance_loss(coord_logits[:,1], target_coord[:,1])
+            angle_loss = ce_loss(angle_logits.view(-1, angle_logits.size(-1)), target_angle)
+            rotation_loss = ce_loss(rotation_logits.view(-1, rotation_logits.size(-1)), target_rotation)
+            loss = radius_loss + azimuth_loss + angle_loss + rotation_loss
+            loss_metric = {
+                "radius_loss": radius_loss.item()
+                "azimuth_loss": azimuth_loss.item(),
+                "angle_loss": angle_loss.item(),
+                "rotation_loss": rotation_loss.item()
+            }
 
         return (loss, outputs, loss_metric) if return_outputs else (loss, loss_metric)
 
@@ -109,7 +140,18 @@ class WaypointTrainer(Trainer):
                 correct_angle += torch.sum(angle_pred == target_angle).item()
                 correct_rotation += torch.sum(rotation_pred == target_rotation).item()
 
-                avg_loss += l1_loss(coord_logits.view(-1), target_coord.view(-1)).item()
+                if self.predict_xyz:
+                    avg_loss += l1_loss(coord_logits.view(-1), target_coord.view(-1)).item()
+                else:
+                    polar_coordinate = torch.empty(coord_logits.size(), device=coord_logits.device)
+                    polar_coordinate[:,0] = coord_logits[:,0] * torch.cos(coord_logits[:,1]/180*math.pi)
+                    polar_coordinate[:,1] = coord_logits[:,0] * torch.sin(coord_logits[:,1]/180*math.pi)
+                    
+                    gt_coordinate = torch.empty(target_coord.size(), device=target_coord.device)
+                    gt_coordinate[:,0] = target_coord[:,0] * torch.cos(target_coord[:,1]/180*math.pi)
+                    gt_coordinate[:,1] = target_coord[:,0] * torch.sin(target_coord[:,1]/180*math.pi)
+
+                    avg_loss += l1_loss(polar_coordinate.view(-1), gt_coordinate.view(-1)).item()
 
         metrics = {
             "coordinate_l1": avg_loss / (data_num * 2),
