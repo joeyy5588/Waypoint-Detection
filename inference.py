@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 eval_data_dir = '/datadrive_c/chengfu/waypoint/data/panorama_valid_seen'
 predict_xyz = False
 eval_dataset = Panorama_Dataset(eval_data_dir, predict_xyz=predict_xyz)
-tokenizer = train_dataset.tokenizer
+tokenizer = eval_dataset.tokenizer
 data_collator = RGBD_Collator(tokenizer)
 
 config = AutoConfig.from_pretrained('bert-base-uncased')

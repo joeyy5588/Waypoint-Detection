@@ -152,7 +152,7 @@ class Panorama_Dataset:
             # need positive gt to calculate loss
             offset = 8
             target_coord = torch.tensor([target_x+offset, target_z+offset])
-        elif self.predict_xyz:
+        else:
             target_coord = torch.tensor([delta_length, delta_angle])
 
         # 30, 0, -30
