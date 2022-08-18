@@ -8,7 +8,7 @@ from .loss import SILogLoss
 from transformers.debug_utils import DebugOption
 from transformers.deepspeed import deepspeed_init
 from transformers.utils import is_sagemaker_mp_enabled, logging, is_torch_tpu_available
-from transformers.trainer_utils import TrainOutput, has_length
+from transformers.trainer_utils import TrainOutput, has_length, speed_metrics
 from transformers.trainer_pt_utils import IterableDatasetShard
 from transformers.trainer_callback import TrainerState
 import torch.distributed as dist
@@ -98,7 +98,7 @@ class WaypointTrainer(Trainer):
             rotation_loss = ce_loss(rotation_logits.view(-1, rotation_logits.size(-1)), target_rotation)
             loss = radius_loss + azimuth_loss + angle_loss + rotation_loss
             loss_metric = {
-                "radius_loss": radius_loss.item()
+                "radius_loss": radius_loss.item(),
                 "azimuth_loss": azimuth_loss.item(),
                 "angle_loss": angle_loss.item(),
                 "rotation_loss": rotation_loss.item()
