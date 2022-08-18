@@ -79,13 +79,15 @@ class WaypointTrainer(Trainer):
         ce_loss = nn.CrossEntropyLoss()
         # mse_loss = nn.MSELoss()
         # l1_loss = nn.L1Loss()
+        l2_loss = nn.MSELoss()
         distance_loss = SILogLoss()
         alpha = 10
         if self.predict_xyz:
-            coord_loss = alpha * distance_loss(coord_logits.view(-1), target_coord.view(-1))
+            coord_loss = l2_loss(coord_logits.view(-1), target_coord.view(-1))
             angle_loss = ce_loss(angle_logits.view(-1, angle_logits.size(-1)), target_angle)
             rotation_loss = ce_loss(rotation_logits.view(-1, rotation_logits.size(-1)), target_rotation)
             loss = coord_loss + angle_loss + rotation_loss
+            print(coord_loss, angle_loss, rotation_loss)
             loss_metric = {
                 "coord_loss": coord_loss.item(),
                 "angle_loss": angle_loss.item(),
@@ -118,6 +120,7 @@ class WaypointTrainer(Trainer):
         correct_angle = 0
         correct_rotation = 0
         avg_loss = 0
+        avg_correct = 0
 
         for i, (inputs) in enumerate(tqdm(eval_dataloader)):
             inputs = self._prepare_inputs(inputs)
@@ -142,6 +145,9 @@ class WaypointTrainer(Trainer):
 
                 if self.predict_xyz:
                     avg_loss += l1_loss(coord_logits.view(-1), target_coord.view(-1)).item()
+                    quantize = torch.round(coord_logits / 0.25) * 0.25
+                    correct = torch.sum(torch.all(coord_logits == target_coord, dim=1))
+                    avg_correct += correct.item()
                 else:
                     polar_coordinate = torch.empty(coord_logits.size(), device=coord_logits.device)
                     polar_coordinate[:,0] = coord_logits[:,0] * torch.cos(coord_logits[:,1]/180*math.pi)
@@ -155,6 +161,7 @@ class WaypointTrainer(Trainer):
 
         metrics = {
             "coordinate_l1": avg_loss / (data_num * 2),
+            "navigation_acc": avg_correct / data_num,
             "angle_acc": correct_angle / data_num,
             "rotation_acc": correct_rotation / data_num
         }

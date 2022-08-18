@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 
 train_data_dir = '/mnt/alfworld/data/panorama_valid_seen'
 eval_data_dir = '/mnt/alfworld/data/panorama_valid_seen'
-predict_xyz = False
+predict_xyz = True
 train_dataset = Panorama_Dataset(train_data_dir, predict_xyz=predict_xyz)
 eval_dataset = Panorama_Dataset(eval_data_dir, predict_xyz=predict_xyz)
 tokenizer = train_dataset.tokenizer
