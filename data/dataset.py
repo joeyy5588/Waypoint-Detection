@@ -109,7 +109,7 @@ class Panorama_Dataset:
             target_x = delta_z
             target_z = -delta_x
 
-        delta_angle = azimuthAngle(0,0,target_x, target_z)
+        # delta_angle = azimuthAngle(0,0,target_x, target_z)
         delta_length = math.sqrt(target_x ** 2 + target_z ** 2)
 
         # delta_angle = round(traj_data['traj']['angle'][nav_point+1]) - input_angle
@@ -148,10 +148,11 @@ class Panorama_Dataset:
 
         input_coord = torch.tensor([input_x, input_z])
 
-        if self.predict_xyz:
-            target_coord = torch.tensor([target_x, target_z])
-        else:
-            target_coord = torch.tensor([delta_length, delta_angle])
+        # if self.predict_xyz:
+        #     target_coord = torch.tensor([target_x, target_z])
+        # else:
+        #     target_coord = torch.tensor([delta_length, delta_angle])
+        target_coord = torch.tensor([target_x, target_z])
 
         # 30, 0, -30
         panorama_angle = torch.LongTensor([8,8,8,8,6,6,6,6,4,4,4,4])

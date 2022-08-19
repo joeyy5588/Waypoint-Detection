@@ -3,6 +3,7 @@ from transformers import Trainer
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
+import torch.nn.functional as F
 from tqdm import tqdm
 from .loss import SILogLoss
 from transformers.debug_utils import DebugOption
@@ -74,28 +75,33 @@ class WaypointTrainer(Trainer):
         target_rotation = meta_dict['target_rotation']
         # forward pass
         outputs = model(input_ids, rgb_list, depth_list, meta_dict['panorama_angle'], meta_dict['panorama_rotation'])
-        coord_logits, angle_logits, rotation_logits = outputs
+        if self.predict_xyz:
+            coord_logits, angle_logits, rotation_logits = outputs
+        else:
+            radius, img_number, angle_logits, rotation_logits = outputs
 
         ce_loss = nn.CrossEntropyLoss()
         # mse_loss = nn.MSELoss()
         # l1_loss = nn.L1Loss()
         l2_loss = nn.MSELoss()
         distance_loss = SILogLoss()
-        alpha = 10
+        alpha = 5
         if self.predict_xyz:
             coord_loss = l2_loss(coord_logits.view(-1), target_coord.view(-1))
             angle_loss = ce_loss(angle_logits.view(-1, angle_logits.size(-1)), target_angle)
             rotation_loss = ce_loss(rotation_logits.view(-1, rotation_logits.size(-1)), target_rotation)
             loss = coord_loss + angle_loss + rotation_loss
-            print(coord_loss, angle_loss, rotation_loss)
+            # print(coord_loss, angle_loss, rotation_loss)
             loss_metric = {
                 "coord_loss": coord_loss.item(),
                 "angle_loss": angle_loss.item(),
                 "rotation_loss": rotation_loss.item()
             }
-        else:
-            radius_loss = alpha * distance_loss(coord_logits[:,0], target_coord[:,0])
-            azimuth_loss = alpha * distance_loss(coord_logits[:,1], target_coord[:,1])
+        else: 
+            target_radius = torch.norm(target_coord, dim=1)
+            target_azimuth = F.normalize(target_coord, dim=1)
+            radius_loss = alpha * distance_loss(radius.view(-1), target_radius)
+            azimuth_loss = l2_loss(img_number, target_azimuth)
             angle_loss = ce_loss(angle_logits.view(-1, angle_logits.size(-1)), target_angle)
             rotation_loss = ce_loss(rotation_logits.view(-1, rotation_logits.size(-1)), target_rotation)
             loss = radius_loss + azimuth_loss + angle_loss + rotation_loss
@@ -131,7 +137,11 @@ class WaypointTrainer(Trainer):
                 target_rotation = meta_dict['target_rotation']
 
                 outputs = model(input_ids, rgb_list, depth_list, meta_dict['panorama_angle'], meta_dict['panorama_rotation'])
-                coord_logits, angle_logits, rotation_logits = outputs
+                if self.predict_xyz:
+                    coord_logits, angle_logits, rotation_logits = outputs
+                else:
+                    radius, img_number, angle_logits, rotation_logits = outputs
+
                 angle_logits = angle_logits.view(-1, angle_logits.size(-1))
                 rotation_logits = rotation_logits.view(-1, rotation_logits.size(-1))
 
@@ -149,15 +159,18 @@ class WaypointTrainer(Trainer):
                     correct = torch.sum(torch.all(coord_logits == target_coord, dim=1))
                     avg_correct += correct.item()
                 else:
-                    polar_coordinate = torch.empty(coord_logits.size(), device=coord_logits.device)
-                    polar_coordinate[:,0] = coord_logits[:,0] * torch.cos(coord_logits[:,1]/180*math.pi)
-                    polar_coordinate[:,1] = coord_logits[:,0] * torch.sin(coord_logits[:,1]/180*math.pi)
+                    pred_coord = radius * img_number
+                    # polar_coordinate = torch.empty(coord_logits.size(), device=coord_logits.device)
+                    # polar_coordinate[:,0] = coord_logits[:,0] * torch.cos(coord_logits[:,1]/180*math.pi)
+                    # polar_coordinate[:,1] = coord_logits[:,0] * torch.sin(coord_logits[:,1]/180*math.pi)
                     
-                    gt_coordinate = torch.empty(target_coord.size(), device=target_coord.device)
-                    gt_coordinate[:,0] = target_coord[:,0] * torch.cos(target_coord[:,1]/180*math.pi)
-                    gt_coordinate[:,1] = target_coord[:,0] * torch.sin(target_coord[:,1]/180*math.pi)
-
-                    avg_loss += l1_loss(polar_coordinate.view(-1), gt_coordinate.view(-1)).item()
+                    # gt_coordinate = torch.empty(target_coord.size(), device=target_coord.device)
+                    # gt_coordinate[:,0] = target_coord[:,0] * torch.cos(target_coord[:,1]/180*math.pi)
+                    # gt_coordinate[:,1] = target_coord[:,0] * torch.sin(target_coord[:,1]/180*math.pi)
+                    avg_loss += l1_loss(pred_coord.view(-1), target_coord.view(-1)).item()
+                    quantize = torch.round(pred_coord / 0.25) * 0.25
+                    correct = torch.sum(torch.all(pred_coord == target_coord, dim=1))
+                    avg_correct += correct.item()
 
         metrics = {
             "coordinate_l1": avg_loss / (data_num * 2),
