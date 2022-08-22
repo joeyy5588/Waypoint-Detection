@@ -86,7 +86,7 @@ class WaypointTrainer(Trainer):
         l2_loss = nn.MSELoss()
         distance_loss = SILogLoss()
         alpha = 5
-        img_rotation = torch.tensor([[0,1],[1,0],[0,-1],[-1,0]])
+        img_rotation = torch.tensor([[0,1],[1,0],[0,-1],[-1,0]]).to(sequence_logits.device)
         sequence_rotation = img_rotation[meta_dict['panorama_rotation']]
         if self.predict_xyz:
             coord_loss = l2_loss(coord_logits.view(-1), target_coord.view(-1))
