@@ -31,7 +31,7 @@ class WaypointTrainer(Trainer):
         callbacks = None,
         optimizers = (None, None),
         preprocess_logits_for_metrics = None,
-        predict_xyz = True):
+        predict_xyz):
         super().__init__(model, args, data_collator, train_dataset, eval_dataset, tokenizer,\
         model_init, compute_metrics, callbacks, optimizers, preprocess_logits_for_metrics)
 
@@ -76,9 +76,9 @@ class WaypointTrainer(Trainer):
         # forward pass
         outputs = model(input_ids, rgb_list, depth_list, meta_dict['panorama_angle'], meta_dict['panorama_rotation'])
         if self.predict_xyz:
-            coord_logits, angle_logits, rotation_logits = outputs
+            coord_logits, angle_logits, rotation_logits, sequence_logits = outputs
         else:
-            radius, img_number, angle_logits, rotation_logits = outputs
+            radius, img_number, angle_logits, rotation_logits, sequence_logits = outputs
 
         ce_loss = nn.CrossEntropyLoss()
         # mse_loss = nn.MSELoss()
@@ -86,14 +86,18 @@ class WaypointTrainer(Trainer):
         l2_loss = nn.MSELoss()
         distance_loss = SILogLoss()
         alpha = 5
+        img_rotation = torch.tensor([[0,1],[1,0],[0,-1],[-1,0]])
+        sequence_rotation = img_rotation[target_rotation]
         if self.predict_xyz:
             coord_loss = l2_loss(coord_logits.view(-1), target_coord.view(-1))
+            seqeunce_loss = l2_loss(sequence_logits, sequence_rotation)
             angle_loss = ce_loss(angle_logits.view(-1, angle_logits.size(-1)), target_angle)
             rotation_loss = ce_loss(rotation_logits.view(-1, rotation_logits.size(-1)), target_rotation)
             loss = coord_loss + angle_loss + rotation_loss
             # print(coord_loss, angle_loss, rotation_loss)
             loss_metric = {
                 "coord_loss": coord_loss.item(),
+                "seqeunce_loss": seqeunce_loss.item()
                 "angle_loss": angle_loss.item(),
                 "rotation_loss": rotation_loss.item()
             }
@@ -138,14 +142,13 @@ class WaypointTrainer(Trainer):
 
                 outputs = model(input_ids, rgb_list, depth_list, meta_dict['panorama_angle'], meta_dict['panorama_rotation'])
                 if self.predict_xyz:
-                    coord_logits, angle_logits, rotation_logits = outputs
+                    coord_logits, angle_logits, rotation_logits, sequence_output = outputs
                 else:
-                    radius, img_number, angle_logits, rotation_logits = outputs
+                    radius, img_number, angle_logits, rotation_logits, sequence_output = outputs
 
                 angle_logits = angle_logits.view(-1, angle_logits.size(-1))
                 rotation_logits = rotation_logits.view(-1, rotation_logits.size(-1))
 
-                coord_pred = coord_logits.view(-1)
                 angle_pred = torch.argmax(angle_logits, dim=-1)
                 rotation_pred = torch.argmax(rotation_logits, dim=-1)
 
@@ -156,6 +159,7 @@ class WaypointTrainer(Trainer):
                 if self.predict_xyz:
                     avg_loss += l1_loss(coord_logits.view(-1), target_coord.view(-1)).item()
                     quantize = torch.round(coord_logits / 0.25) * 0.25
+                    # print(coord_logits, quantize, target_coord)
                     correct = torch.sum(torch.all(coord_logits == target_coord, dim=1))
                     avg_correct += correct.item()
                 else:

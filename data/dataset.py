@@ -158,7 +158,6 @@ class Panorama_Dataset:
         panorama_angle = torch.LongTensor([8,8,8,8,6,6,6,6,4,4,4,4])
         # left, center, right, back
         panorama_rotation = torch.LongTensor([3,0,1,2,3,0,1,2,3,0,1,2])
-        
 
         return input_id, rgb_list, depth_list, \
         panorama_angle, panorama_rotation, target_coord, target_angle, target_rotation

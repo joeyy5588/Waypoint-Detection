@@ -7,14 +7,12 @@ import torch.nn.functional as F
 import torch
 import numpy as np
 
-class Waypoint_Predictor(nn.Module):
-    def __init__(self, config, coord1_classes, coord2_classes, predict_xyz):
+class Pose_Predictor(nn.Module):
+    def __init__(self, config):
         super().__init__()
-        self.predict_xyz = predict_xyz
         # BertPooler
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.tanh = nn.Tanh()
-
         # Classification head
         classifier_dropout = (
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
@@ -22,19 +20,6 @@ class Waypoint_Predictor(nn.Module):
         self.dropout = nn.Dropout(classifier_dropout)
         self.angle_classifier = nn.Linear(config.hidden_size, 13)
         self.rotation_classifier = nn.Linear(config.hidden_size, 4)
-
-        # For regression
-        # self.coord_classifier = nn.Linear(config.hidden_size, 2)
-        # For discretized distance (classification)
-        '''
-            For xyz: 1 = x, 2 = z
-            For polar: 1 = r, 2 = a+bi
-        '''
-        self.transform = nn.Linear(config.hidden_size, 128)
-        self.relu = nn.ReLU()
-        self.imaginary_plane = nn.Linear(128, 2)
-        self.radius = nn.Linear(128, 1)
-        
 
     def forward(self, hidden_states):
         first_token_tensor = hidden_states[:, 0]
@@ -44,17 +29,55 @@ class Waypoint_Predictor(nn.Module):
         angle_logits = self.angle_classifier(pooled_output)
         rotation_logits = self.rotation_classifier(pooled_output)
 
-        pooled_output_2 = self.transform(first_token_tensor)
-        pooled_output_2 = self.relu(pooled_output_2)
-        img_number = self.imaginary_plane(pooled_output_2)
+        return angle_logits, rotation_logits
+
+class Waypoint_Predictor(nn.Module):
+    def __init__(self, config, predict_xyz):
+        super().__init__()
+        self.predict_xyz = predict_xyz
+        '''
+            For xyz: 1 = x, 2 = z
+            For polar: 1 = r, 2 = a+bi
+        '''
+        self.transform = nn.Linear(config.hidden_size, 128)
+        self.relu = nn.ReLU()
+        self.imaginary_plane = nn.Linear(128, 2)
+        self.radius = nn.Linear(128, 1)
+
+    def forward(self, hidden_states):
+        first_token_tensor = hidden_states[:, 0]
+        pooled_output = self.transform(first_token_tensor)
+        pooled_output = self.relu(pooled_output)
+        img_number = self.imaginary_plane(pooled_output)
         img_number = F.normalize(img_number)
-        radius = self.radius(pooled_output_2)
+        radius = self.radius(pooled_output)
+
+        seqeunce_tensor = hidden_states[:,-12:]
+        sequence_output = self.transform(seqeunce_tensor)
+        sequence_output = self.relu(sequence_output)
+        sequence_output = self.imaginary_plane(sequence_output)
+        sequence_output = F.normalize(sequence_output)
+
         if self.predict_xyz:
             coordinate = img_number * radius            
-            return coordinate, angle_logits, rotation_logits
+            return coordinate, sequence_output
         else:
-            return radius, img_number, angle_logits, rotation_logits
-        
+            return radius, img_number, sequence_output
+
+class Navigator(nn.Module):
+    def __init__(self, config, predict_xyz):
+        super().__init__()
+        self.predict_xyz = predict_xyz
+        self.pose_predictor = Pose_Predictor(config)
+        self.waypoint_predictor = Waypoint_Predictor(config, predict_xyz)
+    def forward(self, hidden_states):
+        angle_logits, rotation_logits = self.pose_predictor(hidden_states)
+        if self.predict_xyz:
+            coordinate, sequence_output = self.waypoint_predictor(hidden_states)            
+            return coordinate, angle_logits, rotation_logits, sequence_output
+        else:
+            radius, img_number, sequence_output = self.waypoint_predictor(hidden_states)  
+            return radius, img_number, angle_logits, rotation_logits, sequence_output
 
 
 class Panoramic_Embeddings(nn.Module):
@@ -190,7 +213,7 @@ class Waypoint_Transformer(BertPreTrainedModel):
         self.image_embeddings = Panoramic_Embeddings(config)
         self.encoder = BertEncoder(config)
         self.pooler = BertPooler(config)
-        self.classifier = Waypoint_Predictor(config, self.coord1_classes, self.coord2_classes, predict_xyz)
+        self.classifier = Navigator(config, predict_xyz)
         self.merge_visual_mlp = nn.Linear(config.hidden_size*2, config.hidden_size)
         self.post_init()
 
@@ -231,11 +254,11 @@ class Waypoint_Transformer(BertPreTrainedModel):
         # pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
         if self.predict_xyz:
-            coord_logits, angle_logits, rotation_logits = self.classifier(sequence_output)
-            return (coord_logits, angle_logits, rotation_logits)
+            coord_logits, angle_logits, rotation_logits, sequence_output = self.classifier(sequence_output)
+            return (coord_logits, angle_logits, rotation_logits, sequence_output)
         else:
-            radius, img_number, angle_logits, rotation_logits = self.classifier(sequence_output)
-            return (radius, img_number, angle_logits, rotation_logits)
+            radius, img_number, angle_logits, rotation_logits, sequence_output = self.classifier(sequence_output)
+            return (radius, img_number, angle_logits, rotation_logits, sequence_output)
 
             # coord_logits_1, coord_logits_2, angle_logits, rotation_logits = self.classifier(sequence_output)
 
