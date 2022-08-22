@@ -31,7 +31,7 @@ class WaypointTrainer(Trainer):
         callbacks = None,
         optimizers = (None, None),
         preprocess_logits_for_metrics = None,
-        predict_xyz):
+        predict_xyz = True):
         super().__init__(model, args, data_collator, train_dataset, eval_dataset, tokenizer,\
         model_init, compute_metrics, callbacks, optimizers, preprocess_logits_for_metrics)
 
@@ -87,17 +87,17 @@ class WaypointTrainer(Trainer):
         distance_loss = SILogLoss()
         alpha = 5
         img_rotation = torch.tensor([[0,1],[1,0],[0,-1],[-1,0]])
-        sequence_rotation = img_rotation[target_rotation]
+        sequence_rotation = img_rotation[meta_dict['panorama_rotation']]
         if self.predict_xyz:
             coord_loss = l2_loss(coord_logits.view(-1), target_coord.view(-1))
-            seqeunce_loss = l2_loss(sequence_logits, sequence_rotation)
+            sequence_loss = l2_loss(sequence_logits, sequence_rotation)
             angle_loss = ce_loss(angle_logits.view(-1, angle_logits.size(-1)), target_angle)
             rotation_loss = ce_loss(rotation_logits.view(-1, rotation_logits.size(-1)), target_rotation)
             loss = coord_loss + angle_loss + rotation_loss
             # print(coord_loss, angle_loss, rotation_loss)
             loss_metric = {
                 "coord_loss": coord_loss.item(),
-                "seqeunce_loss": seqeunce_loss.item()
+                "sequence_loss": seqeunce_loss.item(),
                 "angle_loss": angle_loss.item(),
                 "rotation_loss": rotation_loss.item()
             }
