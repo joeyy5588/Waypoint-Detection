@@ -1,0 +1,3 @@
+include waynav/alfred_data/alfred.pddl
+include waynav/alfred_data/alfred.twl2
+include waynav/gen/layouts/*
