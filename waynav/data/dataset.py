@@ -12,6 +12,7 @@ except ImportError:
 import math
 import os
 import json
+import numpy as np
 
 def _convert_image_to_rgb(image):
     return image.convert("RGB")
@@ -161,3 +162,54 @@ class Panorama_Dataset:
 
         return input_id, rgb_list, depth_list, \
         panorama_angle, panorama_rotation, target_coord, target_angle, target_rotation
+
+    @classmethod
+    def process_test_time_data(cls, tokenizer, rgb, depth, instruction):
+        input_id = tokenizer(instruction)
+        input_ids = tokenizer.pad(
+            [input_id],
+            padding=True,
+            return_tensors='pt',
+        )
+
+        img_transform = Compose([
+            Resize(224, interpolation=BICUBIC),
+            CenterCrop(224),
+            Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
+        ])
+
+        depth_transform = Compose([
+            Resize(224, interpolation=BICUBIC),
+            CenterCrop(224),
+        ])
+
+        rgb_img = ToTensor()(rgb)
+        rgb_list = []
+        for col in range(4):
+            for row in range(3):
+                rgb_list.append(rgb_img[:, :300*(row+1), :300*(col+1)])
+
+        depth_img = np.uint8(depth)
+        depth_img = ToTensor()(depth_img)
+        depth_list = []
+        for col in range(4):
+            for row in range(3):
+                depth_list.append(depth_img[:, :300*(row+1), :300*(col+1)])
+
+        for img_ind in range(len(rgb_list)):
+            rgb_list[img_ind] = img_transform(rgb_list[img_ind])
+
+        rgb_list = torch.stack(rgb_list, dim=0).unsqueeze(0)
+
+        for img_ind in range(len(depth_list)):
+            depth_list[img_ind] = depth_transform(depth_list[img_ind])
+
+        depth_list = torch.stack(depth_list, dim=0).unsqueeze(0)
+
+        panorama_angle = torch.LongTensor([8,8,8,8,6,6,6,6,4,4,4,4]).unsqueeze(0)
+        # left, center, right, back
+        panorama_rotation = torch.LongTensor([3,0,1,2,3,0,1,2,3,0,1,2]).unsqueeze(0)
+
+        return input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation
+
+

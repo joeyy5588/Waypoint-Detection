@@ -1,6 +1,6 @@
 import torch.nn as nn
 import torch
-import clip
+# import clip
 from torchvision.models import resnet50
 
 

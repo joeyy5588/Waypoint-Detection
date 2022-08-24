@@ -17,31 +17,28 @@ import numpy as np
 
 import waynav.gen
 import waynav.gen.constants as constants
-from waynav.gen.utils.video_util import VideoSaver
 from waynav.gen.utils.py_util import walklevel
 from waynav.env.thor_env import ThorEnv
 from PIL import Image
 
-# TRAJ_DATA_JSON_FILENAME = "traj_data.json"
-# AUGMENTED_TRAJ_DATA_JSON_FILENAME = "augmented_traj_data.json"
+TRAJ_DATA_JSON_FILENAME = "traj_data.json"
+AUGMENTED_TRAJ_DATA_JSON_FILENAME = "augmented_traj_data.json"
 
-# IMAGES_FOLDER = "images"
-# MASKS_FOLDER = "masks"
-# META_FOLDER = "meta"
-# DEPTH_FOLDER = "depth"
+IMAGES_FOLDER = "images"
+MASKS_FOLDER = "masks"
+META_FOLDER = "meta"
+DEPTH_FOLDER = "depth"
 
-# IMAGE_WIDTH = 300
-# IMAGE_HEIGHT = 300
+IMAGE_WIDTH = 300
+IMAGE_HEIGHT = 300
 
-# render_settings = dict()
-# render_settings['renderImage'] = True
-# render_settings['renderDepthImage'] = True
-# render_settings['renderObjectImage'] = True
-# render_settings['renderClassImage'] = True
+render_settings = dict()
+render_settings['renderImage'] = True
+render_settings['renderDepthImage'] = True
+render_settings['renderObjectImage'] = True
+render_settings['renderClassImage'] = True
 
-# video_saver = VideoSaver()
-
-# scene_dict = {'kitchen':0, 'bedroom':0, 'bathroom':0, 'living':0}
+scene_dict = {'kitchen':0, 'bedroom':0, 'bathroom':0, 'living':0}
 
 
 # def get_image_index(save_path):
@@ -91,27 +88,27 @@ from PIL import Image
 #         os.makedirs(path)
 
 
-# def get_scene_type(scene_num):
-#     if scene_num < 100:
-#         scene_dict['kitchen']+=1
-#         return 'kitchen'
-#     elif scene_num < 300:
-#         scene_dict['living']+=1
-#         return 'living'
-#     elif scene_num < 400:
-#         scene_dict['bedroom']+=1
-#         return 'bedroom'
-#     else:
-#         scene_dict['bathroom']+=1
-#         return 'bathroom'
+def get_scene_type(scene_num):
+    if scene_num < 100:
+        scene_dict['kitchen']+=1
+        return 'kitchen'
+    elif scene_num < 300:
+        scene_dict['living']+=1
+        return 'living'
+    elif scene_num < 400:
+        scene_dict['bedroom']+=1
+        return 'bedroom'
+    else:
+        scene_dict['bathroom']+=1
+        return 'bathroom'
 
 
-# def get_openable_points(traj_data):
-#     scene_num = traj_data['scene']['scene_num']
-#     openable_json_file = os.path.join(alfworld.gen.__path__[0], 'layouts/FloorPlan%d-openable.json' % scene_num)
-#     with open(openable_json_file, 'r') as f:
-#         openable_points = json.load(f)
-#     return openable_points
+def get_openable_points(traj_data):
+    scene_num = traj_data['scene']['scene_num']
+    openable_json_file = os.path.join(alfworld.gen.__path__[0], 'layouts/FloorPlan%d-openable.json' % scene_num)
+    with open(openable_json_file, 'r') as f:
+        openable_points = json.load(f)
+    return openable_points
 
 
 # def explore_scene(env, traj_data, root_dir):
@@ -132,126 +129,126 @@ from PIL import Image
 #         event = env.step(action)
 #         save_frame(env, event, root_dir)
 
-# def augment_traj(env, json_file):
-#     # load json data
-#     splitted = json_file.split('/')[-2]
-#     print(splitted)
-#     with open(json_file) as f:
-#         traj_data = json.load(f)
+def augment_traj(env, json_file):
+    # load json data
+    splitted = json_file.split('/')[-2]
+    print(splitted)
+    with open(json_file) as f:
+        traj_data = json.load(f)
 
 
-#     # fresh images list
-#     traj_data['images'] = list()
+    # fresh images list
+    traj_data['images'] = list()
 
-#     # scene setup
-#     scene_num = traj_data['scene']['scene_num']
-#     object_poses = traj_data['scene']['object_poses']
-#     object_toggles = traj_data['scene']['object_toggles']
-#     dirty_and_empty = traj_data['scene']['dirty_and_empty']
+    # scene setup
+    scene_num = traj_data['scene']['scene_num']
+    object_poses = traj_data['scene']['object_poses']
+    object_toggles = traj_data['scene']['object_toggles']
+    dirty_and_empty = traj_data['scene']['dirty_and_empty']
 
-#     # reset
-#     scene_name = 'FloorPlan%d' % scene_num
-#     with lock:
-#         scene_type = get_scene_type(scene_num)
-#     env.reset(scene_name)
-#     env.restore_scene(object_poses, object_toggles, dirty_and_empty)
+    # reset
+    scene_name = 'FloorPlan%d' % scene_num
+    with lock:
+        scene_type = get_scene_type(scene_num)
+    env.reset(scene_name)
+    env.restore_scene(object_poses, object_toggles, dirty_and_empty)
 
-#     root_dir = os.path.join(args.save_path, str(scene_num), splitted)
+    root_dir = os.path.join(args.save_path, str(scene_num), splitted)
 
-#     imgs_dir = os.path.join(root_dir, IMAGES_FOLDER)
-#     mask_dir = os.path.join(root_dir, MASKS_FOLDER)
-#     meta_dir = os.path.join(root_dir, META_FOLDER)
-#     depth_dir = os.path.join(root_dir, DEPTH_FOLDER)
+    imgs_dir = os.path.join(root_dir, IMAGES_FOLDER)
+    mask_dir = os.path.join(root_dir, MASKS_FOLDER)
+    meta_dir = os.path.join(root_dir, META_FOLDER)
+    depth_dir = os.path.join(root_dir, DEPTH_FOLDER)
 
-#     clear_and_create_dir(root_dir)
-#     clear_and_create_dir(imgs_dir)
-#     clear_and_create_dir(mask_dir)
-#     clear_and_create_dir(meta_dir)
-#     clear_and_create_dir(depth_dir)
+    clear_and_create_dir(root_dir)
+    clear_and_create_dir(imgs_dir)
+    clear_and_create_dir(mask_dir)
+    clear_and_create_dir(meta_dir)
+    clear_and_create_dir(depth_dir)
 
-#     # explore_scene(env, traj_data, root_dir)
-#     x_list = []
-#     z_list = []
-#     rotation_list = []
-#     angle_list = []
-#     event = env.step(dict(traj_data['scene']['init_action']))
-#     # save_frame(env, event, root_dir)
-#     # coord = event.metadata["agent"]['position']
-#     # camera_angle = event.metadata["agent"]["cameraHorizon"]
-#     # print(camera_angle)
-#     # action_count = 0
-#     # x_list.append(coord['x'])
-#     # z_list.append(coord['z'])
-#     # key_x.append(coord['x'])
-#     # key_z.append(coord['z'])
-#     # finish_x.append(coord['x'])
-#     # finish_z.append(coord['z'])
-#     # waypoint_ind.append(action_count)
-#     # print("Task: %s" % (traj_data['template']['task_desc']))
+    # explore_scene(env, traj_data, root_dir)
+    x_list = []
+    z_list = []
+    rotation_list = []
+    angle_list = []
+    event = env.step(dict(traj_data['scene']['init_action']))
+    # save_frame(env, event, root_dir)
+    # coord = event.metadata["agent"]['position']
+    # camera_angle = event.metadata["agent"]["cameraHorizon"]
+    # print(camera_angle)
+    # action_count = 0
+    # x_list.append(coord['x'])
+    # z_list.append(coord['z'])
+    # key_x.append(coord['x'])
+    # key_z.append(coord['z'])
+    # finish_x.append(coord['x'])
+    # finish_z.append(coord['z'])
+    # waypoint_ind.append(action_count)
+    # print("Task: %s" % (traj_data['template']['task_desc']))
 
-#     # setup task
-#     env.set_task(traj_data, args, reward_type='dense')
-#     rewards = []
-#     prev_high_pddl_ind = 0
-#     navigation_point = []
-#     instructions = deque(traj_data['turk_annotations']['anns'][0]['high_descs'])
-#     angle = 45
+    # setup task
+    env.set_task(traj_data, args, reward_type='dense')
+    rewards = []
+    prev_high_pddl_ind = 0
+    navigation_point = []
+    instructions = deque(traj_data['turk_annotations']['anns'][0]['high_descs'])
+    angle = 45
 
-#     for ll_idx, ll_action in enumerate(traj_data['plan']['low_actions']):
-#         # next cmd under the current hl_action
-#         cmd = ll_action['api_action']
-#         hl_action = traj_data['plan']['high_pddl'][ll_action['high_idx']]
-#         discrete_action = hl_action['discrete_action']['action']
-#         # remove unnecessary keys
-#         cmd = {k: cmd[k] for k in ['action', 'objectId', 'receptacleObjectId', 'placeStationary', 'forceAction'] if k in cmd}
+    for ll_idx, ll_action in enumerate(traj_data['plan']['low_actions']):
+        # next cmd under the current hl_action
+        cmd = ll_action['api_action']
+        hl_action = traj_data['plan']['high_pddl'][ll_action['high_idx']]
+        discrete_action = hl_action['discrete_action']['action']
+        # remove unnecessary keys
+        cmd = {k: cmd[k] for k in ['action', 'objectId', 'receptacleObjectId', 'placeStationary', 'forceAction'] if k in cmd}
 
-#         if ll_idx == 1:
-#             current_goal = instructions.popleft()
-#             x_list.append(coord['x'])
-#             z_list.append(coord['z'])
-#             rotation_list.append(rotation)
-#             angle_list.append(angle)
-#             if discrete_action == 'GotoLocation':
-#                 save_panorama(env, event, root_dir)
-#                 navigation_point.append(ll_action['high_idx'])
-#             else:
-#                 save_frame(env, event, root_dir)
+        if ll_idx == 1:
+            current_goal = instructions.popleft()
+            x_list.append(coord['x'])
+            z_list.append(coord['z'])
+            rotation_list.append(rotation)
+            angle_list.append(angle)
+            if discrete_action == 'GotoLocation':
+                save_panorama(env, event, root_dir)
+                navigation_point.append(ll_action['high_idx'])
+            else:
+                save_frame(env, event, root_dir)
         
-#         if prev_high_pddl_ind != (ll_action['high_idx']):
-#             # high_pddl_change.append(action_count)
-#             prev_high_pddl_ind = ll_action['high_idx']
-#             x_list.append(coord['x'])
-#             z_list.append(coord['z'])
-#             angle_list.append(angle)
-#             rotation_list.append(rotation)
-#             current_goal = instructions.popleft()
-#             if discrete_action == 'GotoLocation':
-#                 save_panorama(env, event, root_dir)
-#                 navigation_point.append(ll_action['high_idx'])
-#             else:
-#                 save_frame(env, event, root_dir)
+        if prev_high_pddl_ind != (ll_action['high_idx']):
+            # high_pddl_change.append(action_count)
+            prev_high_pddl_ind = ll_action['high_idx']
+            x_list.append(coord['x'])
+            z_list.append(coord['z'])
+            angle_list.append(angle)
+            rotation_list.append(rotation)
+            current_goal = instructions.popleft()
+            if discrete_action == 'GotoLocation':
+                save_panorama(env, event, root_dir)
+                navigation_point.append(ll_action['high_idx'])
+            else:
+                save_frame(env, event, root_dir)
 
-#         event = env.step(cmd)
-#         coord = event.metadata["agent"]['position']
-#         rotation = event.metadata["agent"]["rotation"]['y']
-#         angle = event.metadata["agent"]['cameraHorizon']
-#             # x_list.append(coord['x'])
-#             # z_list.append(coord['z'])
-#             # key_x.append(coord['x'])
-#             # key_z.append(coord['z'])
-#             # waypoint_ind.append(action_count)
-#         if not event.metadata['lastActionSuccess']:
-#             raise Exception("Replay Failed: %s" % (env.last_event.metadata['errorMessage']))
+        event = env.step(cmd)
+        coord = event.metadata["agent"]['position']
+        rotation = event.metadata["agent"]["rotation"]['y']
+        angle = event.metadata["agent"]['cameraHorizon']
+            # x_list.append(coord['x'])
+            # z_list.append(coord['z'])
+            # key_x.append(coord['x'])
+            # key_z.append(coord['z'])
+            # waypoint_ind.append(action_count)
+        if not event.metadata['lastActionSuccess']:
+            raise Exception("Replay Failed: %s" % (env.last_event.metadata['errorMessage']))
 
-#     x_list.append(coord['x'])
-#     z_list.append(coord['z'])
-#     angle_list.append(angle)
-#     rotation_list.append(rotation)
+    x_list.append(coord['x'])
+    z_list.append(coord['z'])
+    angle_list.append(angle)
+    rotation_list.append(rotation)
         
-#     with open(os.path.join(root_dir, 'traj.json'), 'w') as f:
-#         data_structure = {'traj':{'x': x_list, 'z': z_list, 'angle': angle_list, 'rotation': rotation_list}, 'instructions':traj_data['turk_annotations']['anns'][0]['high_descs'],\
-#             'navigation_point': navigation_point }
-#         json.dump(data_structure, f)
+    with open(os.path.join(root_dir, 'traj.json'), 'w') as f:
+        data_structure = {'traj':{'x': x_list, 'z': z_list, 'angle': angle_list, 'rotation': rotation_list}, 'instructions':traj_data['turk_annotations']['anns'][0]['high_descs'],\
+            'navigation_point': navigation_point }
+        json.dump(data_structure, f)
 
 # def save_panorama(env, event, root_dir):
 #     rgb_save_path = os.path.join(root_dir, IMAGES_FOLDER)
@@ -468,96 +465,92 @@ from PIL import Image
 
 
 
-# def run():
-#     '''
-#     replay loop
-#     '''
-#     # start THOR env
-#     env = ThorEnv(player_screen_width=IMAGE_WIDTH,
-#                   player_screen_height=IMAGE_HEIGHT)
+def run():
+    '''
+    replay loop
+    '''
+    # start THOR env
+    env = ThorEnv(player_screen_width=IMAGE_WIDTH,
+                  player_screen_height=IMAGE_HEIGHT)
 
-#     while len(traj_list) > 0:
-#         lock.acquire()
-#         json_file = traj_list.pop()
-#         lock.release()
+    while len(traj_list) > 0:
+        lock.acquire()
+        json_file = traj_list.pop()
+        lock.release()
 
-#         print ("(%d Left) Augmenting: %s" % (len(traj_list), json_file))
-#         try:
-#             augment_traj(env, json_file)
-#             lock.acquire()
-#             finished_list.append(json_file)
-#             lock.release()
+        print ("(%d Left) Augmenting: %s" % (len(traj_list), json_file))
+        try:
+            augment_traj(env, json_file)
+            lock.acquire()
+            finished_list.append(json_file)
+            lock.release()
             
 
-#         except Exception as e:
-#             import traceback
-#             traceback.print_exc()
-#             print ("Error: " + repr(e))
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print ("Error: " + repr(e))
 
-#     env.stop()
-#     print("Finished.")
+    env.stop()
+    print("Finished.")
 
-# def mp_run(_):
-#     return run()
+def mp_run(_):
+    return run()
 
-# traj_list = []
-# lock = threading.Lock()
-
-# # parse arguments
-# parser = argparse.ArgumentParser()
-# parser.add_argument('--data_path', type=str, default="data/json_2.1.1/valid_unseen")
-# parser.add_argument('--save_path', type=str, default="data/panorama_valid_unseen")
-# parser.add_argument('--smooth_nav', dest='smooth_nav', action='store_true')
-# parser.add_argument('--time_delays', dest='time_delays', action='store_true')
-# parser.add_argument('--shuffle', dest='shuffle', action='store_true')
-# parser.add_argument('--num_threads', type=int, default=1)
-# parser.add_argument('--reward_config', type=str, default='alfworld/agents/config/rewards.json')
-# args = parser.parse_args()
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data_path', type=str, default="/mnt/alfworld/data/json_2.1.1/valid_unseen")
+    parser.add_argument('--save_path', type=str, default="/mnt/alfworld/data/test_waynav")
+    parser.add_argument('--smooth_nav', dest='smooth_nav', action='store_true')
+    parser.add_argument('--time_delays', dest='time_delays', action='store_true')
+    parser.add_argument('--shuffle', dest='shuffle', action='store_true')
+    parser.add_argument('--num_threads', type=int, default=1)
+    parser.add_argument('--reward_config', type=str, default='alfworld/agents/config/rewards.json')
+    args = parser.parse_args()
 
 
-# # cache
-# cache_file = os.path.join(args.save_path, "cache.json")
-# if os.path.isfile(cache_file):
-#     with open(cache_file, 'r') as f:
-#         finished_jsons = json.load(f)
-# else:
-#     finished_jsons = {'finished': []}
+# cache
+cache_file = os.path.join(args.save_path, "cache.json")
+if os.path.isfile(cache_file):
+    with open(cache_file, 'r') as f:
+        finished_jsons = json.load(f)
+else:
+    finished_jsons = {'finished': []}
 
-# # make a list of all the traj_data json files
-# data_path = os.path.expandvars(args.data_path)
-# for dir_name, subdir_list, file_list in walklevel(data_path, level=2):
-#     if "trial_" in dir_name:
-#         json_file = os.path.join(dir_name, TRAJ_DATA_JSON_FILENAME)
-#         if not os.path.isfile(json_file) or json_file in finished_jsons['finished']:
-#             continue
-#         traj_list.append(json_file)
+# make a list of all the traj_data json files
+data_path = os.path.expandvars(args.data_path)
+for dir_name, subdir_list, file_list in walklevel(data_path, level=2):
+    if "trial_" in dir_name:
+        json_file = os.path.join(dir_name, TRAJ_DATA_JSON_FILENAME)
+        if not os.path.isfile(json_file) or json_file in finished_jsons['finished']:
+            continue
+        traj_list.append(json_file)
 
-# # random shuffle
-# if args.shuffle:
-#     random.shuffle(traj_list)
+# random shuffle
+if args.shuffle:
+    random.shuffle(traj_list)
 
-# total_episodes = len(traj_list)
-# finished_list = []
-# start = time.time()
-# counter = 0
-# # run()
-# # start threads
-# traj_list = traj_list[:]
-# threads = []
-# for n in range(args.num_threads):
-#     thread = threading.Thread(target=run)
-#     threads.append(thread)
-#     thread.start()
-#     time.sleep(1)
+total_episodes = len(traj_list)
+finished_list = []
+start = time.time()
+counter = 0
+# run()
+# start threads
+threads = []
+for n in range(args.num_threads):
+    thread = threading.Thread(target=run)
+    threads.append(thread)
+    thread.start()
+    time.sleep(1)
 
-# for i in range(args.num_threads):
-#     threads[i].join()
+for i in range(args.num_threads):
+    threads[i].join()
 
-# cache_file = os.path.join(args.save_path, "cache.json")
-# with open(cache_file, 'w') as f:
-#     json.dump({'finished': finished_list}, f)
+cache_file = os.path.join(args.save_path, "cache.json")
+with open(cache_file, 'w') as f:
+    json.dump({'finished': finished_list}, f)
 
-# duration = time.time()-start
-# print(f"Cost {duration} seconds")
-# print(scene_dict)
-# print("Total: %d; Finished: %d"%(total_episodes, len(finished_list)))
+duration = time.time()-start
+print(f"Cost {duration} seconds")
+print(scene_dict)
+print("Total: %d; Finished: %d"%(total_episodes, len(finished_list)))

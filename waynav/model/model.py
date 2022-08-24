@@ -226,6 +226,9 @@ class Waypoint_Transformer(BertPreTrainedModel):
             self.coord1_space = np.linspace(0, 10, self.coord1_classes)
             self.coord2_space = np.linspace(0, 360, self.coord2_classes)
 
+        self.angle_space = np.linspace(-90, 90, 13)
+        self.rotation_space = np.linspace(0, 270, 4)
+
     def forward(self, input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation):
         # input_rgb_feats = []
         # input_depth_feats = []
@@ -271,7 +274,51 @@ class Waypoint_Transformer(BertPreTrainedModel):
             # coord_logits_2 = torch.sum(coord_logits_2 * bin_values2, dim=-1)
 
             # coord_logits = torch.stack([coord_logits_1, coord_logits_2],dim=1)
-        
+
+    def predict_coordinate(self, input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation, metadata_list):
+        with torch.no_grad():
+            coord_logits, angle_logits, rotation_logits, _ = self.forward(input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation)
+            coord_pred = torch.round(coord_logits / 0.25) * 0.25
+            angle_pred = torch.argmax(angle_logits, dim=-1)
+            rotation_pred = torch.argmax(rotation_logits, dim=-1)
+            coord_pred = coord_pred.cpu().numpy()
+            angle_pred = angle_pred.cpu().numpy()
+            rotation_pred = rotation_pred.cpu().numpy()
+
+            angle_pred = self.angle_space[angle_pred]
+            rotation_pred = self.rotation_space[rotation_pred]
+            
+            next_action_list = []
+            for i, metadata in enumerate(metadata_list):
+                input_rotation = round(metadata['rotation']['y'])
+                output_x, output_z = coord_pred[i]
+                if input_rotation == 0:
+                    delta_x = output_x
+                    delta_z = output_z
+                elif input_rotation == 90:
+                    delta_x = output_z
+                    delta_z = -output_x
+                elif input_rotation == 180:
+                    delta_x = -output_x
+                    delta_z = -output_z
+                elif input_rotation == 270:
+                    delta_x = -output_z
+                    delta_z = output_x
+
+                teleport_action = {
+                    'action': 'TeleportFull',
+                    'rotation': {'x': 0.0, 'y': rotation_pred[i], 'z': 0.0},
+                    'x': metadata['position']['x'] + delta_x,
+                    'z': metadata['position']['z'] + delta_z,
+                    'y': metadata['position']['y'],
+                    'horizon': angle_pred[i],
+                }
+
+                next_action_list.append(teleport_action)
+
+            return next_action_list
+
+
 
         
     def softmax(self, input, t=0.1):
