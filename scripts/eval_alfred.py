@@ -13,7 +13,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     
-    config = AutoConfig.from_pretrained('bert-base-uncased')
+    config = AutoConfig.from_pretrained('prajjwal1/bert-medium')
     model = Waypoint_Transformer(config, predict_xyz=True).from_pretrained('output/checkpoint-2500')
     model.eval()
 

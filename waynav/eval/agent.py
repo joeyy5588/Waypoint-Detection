@@ -19,7 +19,7 @@ class Eval_Agent(object):
         self.traj_list = []
         self.waypoint_list = []
         self.model = model
-        self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+        self.tokenizer = AutoTokenizer.from_pretrained("prajjwal1/bert-medium")
 
         # cache
         cache_file = os.path.join(args.save_path, "cache.json")
@@ -53,7 +53,8 @@ class Eval_Agent(object):
 
         direct_success = 0
         approx_success = 0
-        fail = 0 
+        nav_fail = 0 
+        teleport_fail = 0
         while len(traj_list) > 0:
             json_file = traj_list.pop()
             waypoint_file = waypoint_list.pop()
@@ -66,8 +67,10 @@ class Eval_Agent(object):
                     direct_success += 1
                 elif success == 0.5:
                     approx_success += 1
+                elif success == -1:
+                    teleport_fail += 1
                 else:
-                    fail += 1
+                    nav_fail += 1
                 finished_list.append(json_file)
                 
 
@@ -78,7 +81,8 @@ class Eval_Agent(object):
 
         env.stop()
         print("Finished.")
-        print("Direct Success: %d, Approx Success: %d, Fail: %d"%(direct_success, approx_success, fail))
+        print("Direct Success: %d, Approx Success: %d, Teleport Fail: %d, Navigation Fail: %d"\
+        %(direct_success, approx_success, teleport_fail, nav_fail))
 
     @classmethod
     def plot_waypoint(cls, waypoint_file, predict_waypoint):
@@ -131,7 +135,7 @@ class Eval_Agent(object):
         fail = 0
         progress_indicator = 1
         predicted_waypoints = []
-        while fail < 2:
+        while fail < 4:
             last_event = event
             current_nav_point = \
             (waypoint_data['traj']['x'][navpoint_idx[progress_indicator]], waypoint_data['traj']['z'][navpoint_idx[progress_indicator]])
@@ -162,7 +166,7 @@ class Eval_Agent(object):
                 fail+=1
                 if not event.metadata['lastActionSuccess']:
                     print("Cannot teleport to here")
-                    return predicted_waypoints, 0
+                    return predicted_waypoints, -1
 
         return predicted_waypoints, 0
 

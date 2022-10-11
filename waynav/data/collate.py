@@ -39,3 +39,38 @@ class RGBD_Collator:
         }
 
         return input_ids, rgb_list, depth_list, meta_dict
+
+
+class ROI_Collator:
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+        self.padding = True
+        self.return_tensors = "pt"
+
+    def __call__(self, batch):
+
+        input_id, img_feat, panorama_angle, panorama_rotation, target_coord = [], [], [], [], []
+
+        for data in batch:
+            input_id += data[0]
+            img_feat += data[1]
+            panorama_angle += data[2]
+            panorama_rotation += data[3]
+            target_coord += data[4]
+
+        input_ids = self.tokenizer.pad(
+            input_id,
+            padding=self.padding,
+            return_tensors=self.return_tensors,
+        )
+        img_feat = torch.stack(img_feat, dim=0)
+
+        input_dict = {
+            'input_ids': input_ids,
+            'img_feat': img_feat,
+            'panorama_angle': torch.LongTensor(panorama_angle).unsqueeze(1),
+            'panorama_rotation': torch.LongTensor(panorama_rotation).unsqueeze(1),
+            'target_coord': torch.stack(target_coord, dim=0),
+        }
+
+        return input_dict

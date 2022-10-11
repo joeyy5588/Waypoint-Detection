@@ -83,7 +83,7 @@ class Navigator(nn.Module):
 class Panoramic_Embeddings(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.coord_embedding = nn.Linear(2, config.hidden_size)
+        # self.coord_embedding = nn.Linear(2, config.hidden_size)
         self.angle_embedding = nn.Embedding(13, config.hidden_size)
         self.rotation_embedding = nn.Embedding(4, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
@@ -217,18 +217,6 @@ class Waypoint_Transformer(BertPreTrainedModel):
         self.merge_visual_mlp = nn.Linear(config.hidden_size*2, config.hidden_size)
         self.post_init()
 
-        self.rgb_resnet = RGB_ResNet(config)
-        self.depth_resnet = Depth_ResNet(config)
-        if predict_xyz:
-            self.coord1_space = np.linspace(0, 16, self.coord1_classes)
-            self.coord2_space = np.linspace(0, 16, self.coord2_classes)
-        else:
-            self.coord1_space = np.linspace(0, 10, self.coord1_classes)
-            self.coord2_space = np.linspace(0, 360, self.coord2_classes)
-
-        self.angle_space = np.linspace(-90, 90, 13)
-        self.rotation_space = np.linspace(0, 270, 4)
-
     def forward(self, input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation):
         # input_rgb_feats = []
         # input_depth_feats = []
@@ -317,12 +305,138 @@ class Waypoint_Transformer(BertPreTrainedModel):
                 next_action_list.append(teleport_action)
 
             return next_action_list
-
-
-
         
     def softmax(self, input, t=0.1):
         nom = torch.exp(input/t)
         denom = torch.sum(nom, dim=1).unsqueeze(1)
         return nom / denom
 
+
+class ROI_Encoder(BertPreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        self.embeddings = BertEmbeddings(config)
+        # Feature dim + 4D Coordinate
+        self.image_embeddings = nn.Linear(1024+4, config.hidden_size)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.view_embeddings = Panoramic_Embeddings(config)
+        self.encoder = BertEncoder(config)
+        self.pooler = BertPooler(config)
+        self.post_init()
+
+    def forward(self, input_ids, img_feat, panorama_angle, panorama_rotation):
+        # Dataparallel will split 
+        batch_size = panorama_angle.size(0)
+        # B * 12 * D -> (B*12) * D
+        view_embeddings = self.view_embeddings(panorama_angle, panorama_rotation)
+        roi_embeddings = self.dropout(self.image_embeddings(img_feat))
+
+        word_embeddings = self.embeddings(input_ids['input_ids'], token_type_ids=input_ids['token_type_ids'])
+        input_feats = torch.cat([word_embeddings, view_embeddings, roi_embeddings], dim=1)
+        encoder_outputs = self.encoder(input_feats)
+        pooled_output = self.pooler(encoder_outputs[0])
+
+        return pooled_output
+
+class View_Selector(BertPreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        self.encoder = ROI_Encoder(config).from_pretrained('prajjwal1/bert-medium')
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.classifier = nn.Linear(config.hidden_size, 1)
+        self.post_init()
+
+    def forward(self, input_ids, img_feat, panorama_angle, panorama_rotation):
+        pooled_output = self.encoder(input_ids, img_feat, panorama_angle, panorama_rotation)
+        pooled_output = self.dropout(pooled_output)
+        logits = self.classifier(pooled_output)
+
+        return logits
+
+class ROI_Waypoint_Predictor(BertPreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        self.encoder = ROI_Encoder(config).from_pretrained('prajjwal1/bert-medium')
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.imaginary_plane = nn.Linear(config.hidden_size, 2)
+        self.radius = nn.Linear(config.hidden_size, 1)
+        self.post_init()
+
+    def forward(self, input_ids, img_feat, panorama_angle, panorama_rotation):
+        pooled_output = self.encoder(input_ids, img_feat, panorama_angle, panorama_rotation)
+        pooled_output = self.dropout(pooled_output)
+        img_number = self.imaginary_plane(pooled_output)
+        img_number = F.normalize(img_number)
+        radius = self.radius(pooled_output)
+        coordinate = img_number * radius        
+
+        return coordinate
+
+
+
+class ROI_Navigator(BertPreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+
+        self.view_selector = View_Selector(config)
+        self.waypoint_predictor = ROI_Waypoint_Predictor(config)
+
+        self.post_init()
+
+    def forward(self, input_ids, img_feat, panorama_angle, panorama_rotation):
+        logits = self.view_selector(input_ids, img_feat, panorama_angle, panorama_rotation)
+        coordinate = self.waypoint_predictor(input_ids, img_feat, panorama_angle, panorama_rotation)
+
+        return logits, coordinate
+
+    def predict_coordinate(self, input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation, metadata_list):
+        with torch.no_grad():
+            coord_logits, angle_logits, rotation_logits, _ = self.forward(input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation)
+            coord_pred = torch.round(coord_logits / 0.25) * 0.25
+            angle_pred = torch.argmax(angle_logits, dim=-1)
+            rotation_pred = torch.argmax(rotation_logits, dim=-1)
+            coord_pred = coord_pred.cpu().numpy()
+            angle_pred = angle_pred.cpu().numpy()
+            rotation_pred = rotation_pred.cpu().numpy()
+
+            angle_pred = self.angle_space[angle_pred]
+            rotation_pred = self.rotation_space[rotation_pred]
+            
+            next_action_list = []
+            for i, metadata in enumerate(metadata_list):
+                input_rotation = round(metadata['rotation']['y'])
+                output_x, output_z = coord_pred[i]
+                if input_rotation == 0:
+                    delta_x = output_x
+                    delta_z = output_z
+                elif input_rotation == 90:
+                    delta_x = output_z
+                    delta_z = -output_x
+                elif input_rotation == 180:
+                    delta_x = -output_x
+                    delta_z = -output_z
+                elif input_rotation == 270:
+                    delta_x = -output_z
+                    delta_z = output_x
+
+                teleport_action = {
+                    'action': 'TeleportFull',
+                    'rotation': {'x': 0.0, 'y': rotation_pred[i], 'z': 0.0},
+                    'x': metadata['position']['x'] + delta_x,
+                    'z': metadata['position']['z'] + delta_z,
+                    'y': metadata['position']['y'],
+                    'horizon': angle_pred[i],
+                }
+
+                next_action_list.append(teleport_action)
+
+            return next_action_list
+  
+    def softmax(self, input, t=0.1):
+        nom = torch.exp(input/t)
+        denom = torch.sum(nom, dim=1).unsqueeze(1)
+        return nom / denom

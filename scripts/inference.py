@@ -12,7 +12,7 @@ eval_dataset = Panorama_Dataset(eval_data_dir, predict_xyz=predict_xyz)
 tokenizer = eval_dataset.tokenizer
 data_collator = RGBD_Collator(tokenizer)
 
-config = AutoConfig.from_pretrained('bert-base-uncased')
+config = AutoConfig.from_pretrained('prajjwal1/bert-medium')
 model = Waypoint_Transformer(config, predict_xyz=predict_xyz).from_pretrained('/datadrive_c/chengfu/waypoint/output/checkpoint-5500')
 
 training_args = TrainingArguments(
