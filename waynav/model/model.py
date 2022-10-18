@@ -96,6 +96,21 @@ class Panoramic_Embeddings(nn.Module):
         embeddings = self.dropout(embeddings)
         return embeddings
 
+class Rotation_Embeddings(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        # self.coord_embedding = nn.Linear(2, config.hidden_size)
+        self.rotation_embedding = nn.Embedding(4, config.hidden_size)
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def forward(self, input_rotation):
+        # embeddings = self.coord_embedding(input_coord) + self.angle_embedding(input_angle) + self.rotation_embedding(input_rotation)
+        embeddings = self.rotation_embedding(input_rotation)
+        embeddings = self.LayerNorm(embeddings)
+        embeddings = self.dropout(embeddings)
+        return embeddings
+
 class VlnResnetDepthEncoder(nn.Module):
     def __init__(
         self,
@@ -320,16 +335,13 @@ class ROI_Encoder(BertPreTrainedModel):
         # Feature dim + 4D Coordinate
         self.image_embeddings = nn.Linear(1024+4, config.hidden_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.view_embeddings = Panoramic_Embeddings(config)
+        self.view_embeddings = Rotation_Embeddings(config)
         self.encoder = BertEncoder(config)
         self.pooler = BertPooler(config)
         self.post_init()
 
-    def forward(self, input_ids, img_feat, panorama_angle, panorama_rotation):
-        # Dataparallel will split 
-        batch_size = panorama_angle.size(0)
-        # B * 12 * D -> (B*12) * D
-        view_embeddings = self.view_embeddings(panorama_angle, panorama_rotation)
+    def forward(self, input_ids, img_feat, panorama_rotation):
+        view_embeddings = self.view_embeddings(panorama_rotation)
         roi_embeddings = self.dropout(self.image_embeddings(img_feat))
 
         word_embeddings = self.embeddings(input_ids['input_ids'], token_type_ids=input_ids['token_type_ids'])
@@ -345,12 +357,14 @@ class View_Selector(BertPreTrainedModel):
         self.config = config
         self.encoder = ROI_Encoder(config).from_pretrained('prajjwal1/bert-medium')
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size, 1)
+        self.classifier = nn.Linear(config.hidden_size*4, 4)
         self.post_init()
 
-    def forward(self, input_ids, img_feat, panorama_angle, panorama_rotation):
-        pooled_output = self.encoder(input_ids, img_feat, panorama_angle, panorama_rotation)
+    def forward(self, input_ids, img_feat, panorama_rotation):
+        pooled_output = self.encoder(input_ids, img_feat, panorama_rotation)
         pooled_output = self.dropout(pooled_output)
+        b_size = pooled_output.size(0)
+        pooled_output = pooled_output.view(b_size//4, -1)
         logits = self.classifier(pooled_output)
 
         return logits
@@ -359,14 +373,14 @@ class ROI_Waypoint_Predictor(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
-        self.encoder = ROI_Encoder(config).from_pretrained('prajjwal1/bert-medium')
+        self.encoder = ROI_Encoder(config).from_pretrained('bert-base-uncased')
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.imaginary_plane = nn.Linear(config.hidden_size, 2)
         self.radius = nn.Linear(config.hidden_size, 1)
         self.post_init()
 
-    def forward(self, input_ids, img_feat, panorama_angle, panorama_rotation):
-        pooled_output = self.encoder(input_ids, img_feat, panorama_angle, panorama_rotation)
+    def forward(self, input_ids, img_feat, panorama_rotation):
+        pooled_output = self.encoder(input_ids, img_feat, panorama_rotation)
         pooled_output = self.dropout(pooled_output)
         img_number = self.imaginary_plane(pooled_output)
         img_number = F.normalize(img_number)
