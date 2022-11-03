@@ -100,7 +100,7 @@ class Rotation_Embeddings(nn.Module):
     def __init__(self, config):
         super().__init__()
         # self.coord_embedding = nn.Linear(2, config.hidden_size)
-        self.rotation_embedding = nn.Embedding(4, config.hidden_size)
+        self.rotation_embedding = nn.Embedding(5, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
@@ -340,12 +340,16 @@ class ROI_Encoder(BertPreTrainedModel):
         self.pooler = BertPooler(config)
         self.post_init()
 
-    def forward(self, input_ids, img_feat, panorama_rotation):
-        view_embeddings = self.view_embeddings(panorama_rotation)
-        roi_embeddings = self.dropout(self.image_embeddings(img_feat))
+    def forward(self, input_ids, img_feat, panorama_rotation, view_idx):
+        # view_embeddings = self.view_embeddings(panorama_rotation)
+        view_idx_embeddings = self.view_embeddings(view_idx)
+        img_embeddings = self.image_embeddings(img_feat)
+        roi_embeddings = self.dropout(img_embeddings+view_idx_embeddings)
+        # roi_embeddings = self.dropout(img_embeddings)
 
         word_embeddings = self.embeddings(input_ids['input_ids'], token_type_ids=input_ids['token_type_ids'])
-        input_feats = torch.cat([word_embeddings, view_embeddings, roi_embeddings], dim=1)
+        # input_feats = torch.cat([word_embeddings, view_embeddings, roi_embeddings], dim=1)
+        input_feats = torch.cat([word_embeddings, roi_embeddings], dim=1)
         encoder_outputs = self.encoder(input_feats)
         pooled_output = self.pooler(encoder_outputs[0])
 
@@ -355,16 +359,17 @@ class View_Selector(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
-        self.encoder = ROI_Encoder(config).from_pretrained('prajjwal1/bert-medium')
+        self.encoder = ROI_Encoder(config).from_pretrained('bert-base-uncased')
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size*4, 4)
+        # self.classifier = nn.Linear(config.hidden_size*4, 9)
+        self.classifier = nn.Linear(config.hidden_size, 9)
         self.post_init()
 
-    def forward(self, input_ids, img_feat, panorama_rotation):
-        pooled_output = self.encoder(input_ids, img_feat, panorama_rotation)
+    def forward(self, input_ids, img_feat, panorama_rotation, view_idx):
+        pooled_output = self.encoder(input_ids, img_feat, panorama_rotation, view_idx)
         pooled_output = self.dropout(pooled_output)
         b_size = pooled_output.size(0)
-        pooled_output = pooled_output.view(b_size//4, -1)
+        # pooled_output = pooled_output.view(b_size//4, -1)
         logits = self.classifier(pooled_output)
 
         return logits
@@ -373,19 +378,21 @@ class ROI_Waypoint_Predictor(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
-        self.encoder = ROI_Encoder(config).from_pretrained('bert-base-uncased')
+        self.encoder = ROI_Encoder(config)#.from_pretrained('bert-base-uncased')
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.imaginary_plane = nn.Linear(config.hidden_size, 2)
-        self.radius = nn.Linear(config.hidden_size, 1)
+        # self.imaginary_plane = nn.Linear(config.hidden_size, 2)
+        # self.radius = nn.Linear(config.hidden_size, 1)
+        self.distance_predictor = nn.Linear(config.hidden_size, 1)
         self.post_init()
 
     def forward(self, input_ids, img_feat, panorama_rotation):
         pooled_output = self.encoder(input_ids, img_feat, panorama_rotation)
         pooled_output = self.dropout(pooled_output)
-        img_number = self.imaginary_plane(pooled_output)
-        img_number = F.normalize(img_number)
-        radius = self.radius(pooled_output)
-        coordinate = img_number * radius        
+        # img_number = self.imaginary_plane(pooled_output)
+        # img_number = F.normalize(img_number)
+        # radius = self.radius(pooled_output)
+        # coordinate = img_number * radius
+        coordinate = self.distance_predictor(pooled_output)        
 
         return coordinate
 

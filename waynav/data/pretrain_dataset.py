@@ -44,19 +44,25 @@ class Pretrain_Dataset:
         self.img_fn_list = []
         self.feat_obj_list = []
         self.feat_recep_list = []
-        self.img_feat_len = 30
+        self.img_feat_len = 60
         for n in os.listdir(root_dir):
             if os.path.isdir(os.path.join(root_dir, n)):
                 for trial in os.listdir(os.path.join(root_dir, n)):
                     try:
                         traj_data = json.load(open(os.path.join(root_dir, n, trial, 'traj.json')))
+                        traj_x = traj_data['traj']['x']
+                        traj_z = traj_data['traj']['z']
                     except:
                         continue
                     for nav_point in traj_data["navigation_point"]:
+                        # x_diff = traj_x[nav_point+1] - traj_x[nav_point]
+                        # z_diff = traj_z[nav_point+1] - traj_z[nav_point]
+                        # if x_diff == 0 and z_diff == 0:
+                        #     continue
                         self.traj_list.append(traj_data)
                         self.img_fn_list.append(os.path.join(root_dir, n, trial, 'images', str(nav_point).zfill(9) + '.png'))
-                        obj_feat = [os.path.join(root_dir, n, trial, 'objects', str(nav_point).zfill(9) + '_' + str(x) + '.npz') for x in range(12)]
-                        recep_feat = [os.path.join(root_dir, n, trial, 'objects', str(nav_point).zfill(9) + '_' + str(x) + '.npz') for x in range(12)]
+                        obj_feat = [os.path.join(root_dir, n, trial, 'objects', str(nav_point).zfill(9) + '_' + str(x) + '.npz') for x in range(4, 12)]
+                        recep_feat = [os.path.join(root_dir, n, trial, 'objects', str(nav_point).zfill(9) + '_' + str(x) + '.npz') for x in range(4, 12)]
                         self.feat_obj_list.append(obj_feat)
                         self.feat_recep_list.append(recep_feat)
 
@@ -85,25 +91,30 @@ class Pretrain_Dataset:
         instruction = traj_data['instructions'][nav_point]
 
         img_feat = []
-        textual_inputs = []
         input_ids = []
         obj_lists = []
         all_bbox_feats = []
+        view_idx_lists = []
 
-        for i in range(4, 12):
+        for i in range(8):
             obj_list = list(obj_feat[i]['pred_class']) + list(recep_feat[i]['pred_class'])
-            obj_lists.append(obj_list)
+            
             # input_ids.append(self.tokenizer(instruction, ' '.join(obj_list)))
             if len(obj_feat[i]['pred_feat'].shape) > 1:
-                obj_feat[i]['pred_box'][:,[1,3]] += 300*((i-4)//4)
-                obj_bbox_feat = np.concatenate((obj_feat[i]['pred_feat'], obj_feat[i]['pred_box']), axis=1)
+                temp_bbox = obj_feat[i]['pred_box']
+                temp_bbox[:,[1,3]] += 300*(i//4)
+                temp_bbox /= 300
+                obj_bbox_feat = np.concatenate((obj_feat[i]['pred_feat'], temp_bbox), axis=1)
             if len(recep_feat[i]['pred_feat'].shape) > 1:
-                obj_feat[i]['pred_box'][:,[1,3]] += 300*((i-4)//4)
-                recep_bbox_feat = np.concatenate((recep_feat[i]['pred_feat'], recep_feat[i]['pred_box']), axis=1)
+                temp_bbox = recep_feat[i]['pred_box']
+                temp_bbox[:,[1,3]] += 300*(i//4)
+                temp_bbox /= 300
+                recep_bbox_feat = np.concatenate((recep_feat[i]['pred_feat'], temp_bbox), axis=1)
             
             if len(obj_feat[i]['pred_feat']) == 0:
                 if len(recep_feat[i]['pred_feat']) == 0:
                     all_bbox_feat = np.zeros((1, 1024+4), dtype=np.float32)
+                    obj_list = ['dummy']
                 else:
                     all_bbox_feat = recep_bbox_feat
             else:
@@ -112,7 +123,86 @@ class Pretrain_Dataset:
                 else:
                     all_bbox_feat = np.concatenate((obj_bbox_feat, recep_bbox_feat), axis=0)
             
+            obj_lists.append(obj_list)
             all_bbox_feats.append(all_bbox_feat)
+
+        # for i in range(4):
+        #     # combined_obj_list = obj_lists[i] + obj_lists[i+4]
+        #     # combined_bbox_feat = np.concatenate((all_bbox_feats[i], all_bbox_feats[i+4]), axis=0)
+        #     view_idx = [i] * (all_bbox_feats[i].shape[0]+all_bbox_feats[i+4].shape[0])
+
+        #     left_idx = (i-1) % 4
+        #     right_idx = (i+1) % 4
+        #     left_bbox_feat = []
+        #     right_bbox_feat = []
+        #     left_obj_list = []
+        #     right_obj_list = []
+        #     left_view_idx = []
+        #     right_view_idx = []
+
+        #     for j in range(len(all_bbox_feats[left_idx])):
+        #         if all_bbox_feats[left_idx][j,-2] > 0.5:
+        #             left_obj_list.append(obj_lists[left_idx][j])
+        #             left_bbox_feat.append(all_bbox_feats[left_idx][j])
+        #             left_view_idx.append((i-1) % 4)
+
+        #     for j in range(len(all_bbox_feats[right_idx])):
+        #         if all_bbox_feats[right_idx][j,-2] < 0.5:
+        #             right_obj_list.append(obj_lists[right_idx][j])
+        #             right_bbox_feat.append(all_bbox_feats[right_idx][j])
+        #             right_view_idx.append((i+1) % 4)
+
+        #     left_idx += 4
+        #     right_idx += 4
+
+        #     for j in range(len(all_bbox_feats[left_idx])):
+        #         if all_bbox_feats[left_idx][j,-2] > 0.5:
+        #             left_obj_list.append(obj_lists[left_idx][j])
+        #             left_bbox_feat.append(all_bbox_feats[left_idx][j])
+        #             left_view_idx.append((i-1) % 4)
+
+        #     for j in range(len(all_bbox_feats[right_idx])):
+        #         if all_bbox_feats[right_idx][j,-2] < 0.5:
+        #             right_obj_list.append(obj_lists[right_idx][j])
+        #             right_bbox_feat.append(all_bbox_feats[right_idx][j])
+        #             right_view_idx.append((i+1) % 4)
+
+        #     combined_obj_list = obj_lists[i] + obj_lists[i+4] + left_obj_list + right_obj_list
+        #     combined_obj_list = list(set(combined_obj_list))
+        #     input_ids.append(self.tokenizer(instruction, ' '.join(combined_obj_list)))
+
+        #     left_bbox_feat = np.array(left_bbox_feat)
+        #     right_bbox_feat = np.array(right_bbox_feat)
+
+        #     if len(left_bbox_feat) == 0:
+        #         left_bbox_feat = np.zeros((1, 1024+4), dtype=np.float32)
+        #         left_view_idx = [(i-1) % 4]
+        #     if len(right_bbox_feat) == 0:
+        #         right_bbox_feat = np.zeros((1, 1024+4), dtype=np.float32)
+        #         right_view_idx = [(i+1) % 4]
+
+        #     # print(all_bbox_feats[i].shape, all_bbox_feats[i+4].shape, left_bbox_feat.shape, right_bbox_feat.shape)
+        #     # print(combined_obj_list)
+        #     combined_bbox_feat = np.concatenate((all_bbox_feats[i], all_bbox_feats[i+4], \
+        #     left_bbox_feat, right_bbox_feat), axis=0)
+            
+        #     view_idx = view_idx + left_view_idx + right_view_idx
+        #     view_idx = np.array(view_idx)
+
+        #     assert (len(view_idx) == len(combined_bbox_feat)), print(view_idx.shape, combined_bbox_feat.shape)
+
+        #     # print(view_idx.shape, combined_bbox_feat.shape, self.img_feat_len-combined_bbox_feat.shape[0])
+            
+        #     if combined_bbox_feat.shape[0] >= self.img_feat_len:
+        #         combined_bbox_feat = combined_bbox_feat[:self.img_feat_len]
+        #         view_idx = view_idx[:self.img_feat_len]
+        #     else:
+        #         # [(0,1),(0,1)] -> # of padding before & after the n-th axis
+        #         view_idx = np.pad(view_idx, (0, self.img_feat_len-combined_bbox_feat.shape[0]), constant_values=4)
+        #         combined_bbox_feat = np.pad(combined_bbox_feat, [(0, self.img_feat_len-combined_bbox_feat.shape[0]), (0, 0)], constant_values=0)
+
+        #     view_idx_lists.append(torch.LongTensor(view_idx))
+        #     img_feat.append(torch.tensor(combined_bbox_feat))
 
         for i in range(4):
             combined_obj_list = obj_lists[i] + obj_lists[i+4]# + obj_lists[i+8]
@@ -144,6 +234,30 @@ class Pretrain_Dataset:
             target_x = delta_z
             target_z = -delta_x
 
+        direction = 0
+        if target_x // 0.25 == 0:
+            if target_z // 0.25 == 0:
+                direction = 0
+            elif target_z > 0:
+                direction = 1
+            elif target_z < 0:
+                direction = 5
+        elif target_z // 0.25 == 0:
+            if target_x > 0:
+                direction = 3
+            elif target_x < 0:
+                direction = 7
+        elif target_x > 0:
+            if target_z > 0:
+                direction = 2
+            elif target_z < 0:
+                direction = 4
+        elif target_x < 0:
+            if target_z > 0:
+                direction = 8
+            elif target_z < 0:
+                direction = 6
+
         delta_angle = azimuthAngle(0, 0, target_x, target_z)
 
         # Default face to the front, left->front->right->back
@@ -169,7 +283,8 @@ class Pretrain_Dataset:
             target_x = target_z
             target_z = -target_x
 
-        target_coord = torch.tensor([target_x, target_z])
+        # For subinstruction the only prediction is the distance along the z-axis
+        target_coord = torch.tensor([target_z])
 
         panorama_rotation = [0,1,2,3]
 
@@ -177,8 +292,10 @@ class Pretrain_Dataset:
             input_ids = [input_ids[target_view]]
             img_feat = [img_feat[target_view]]
             panorama_rotation = [panorama_rotation[target_view]]
+            # view_idx_lists = [view_idx_lists[target_view]]
 
-        return input_ids, img_feat, panorama_rotation, target_coord, target_view
+        # return input_ids, img_feat, panorama_rotation, view_idx_lists, target_coord, target_view
+        return input_ids, img_feat, panorama_rotation, target_coord, direction
 
     @classmethod
     def process_test_time_data(cls, tokenizer, rgb, depth, instruction):

@@ -19,7 +19,7 @@ import math, time, os
 
 logger = logging.get_logger(__name__)
 
-class PretrainTrainer(Trainer):
+class ActionTrainer(Trainer):
     def __init__(self,
         model = None,
         args = None,
@@ -31,24 +31,15 @@ class PretrainTrainer(Trainer):
         compute_metrics = None,
         callbacks = None,
         optimizers = (None, None),
-        preprocess_logits_for_metrics = None,
-        train_predictor = True):
+        preprocess_logits_for_metrics = None):
         super().__init__(model, args, data_collator, train_dataset, eval_dataset, tokenizer,\
         model_init, compute_metrics, callbacks, optimizers, preprocess_logits_for_metrics)
 
-        self.train_predictor = train_predictor
         self.softmax = nn.Softmax(dim=-1)
 
     def training_step(self, model, inputs):
         model.train()
         inputs = self._prepare_inputs(inputs)
-
-        # for k, v in inputs.items():
-        #     if isinstance(v, dict):
-        #         print(v['input_ids'].size(), v['token_type_ids'].size())
-        #         print(v['input_ids'][:,:20], v['token_type_ids'][:,:20])
-        #     else:
-        #         print(k, v.size())
 
         if is_sagemaker_mp_enabled():
             loss_mb = smp_forward_backward(model, inputs, self.args.gradient_accumulation_steps)
@@ -80,24 +71,33 @@ class PretrainTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
         input_ids = inputs['input_ids']
         img_feat = inputs['img_feat']
-        panorama_rotation = inputs['panorama_rotation']
+        act_seq = inputs['act_seq']
         view_idx = inputs['view_idx']
         target_coord = inputs['target_coord']
         target_view = inputs['target_view']
+        attention_mask = inputs['attention_mask']
+        # for k, v in inputs.items():
+        #     try:
+        #         print(k, v.size())
+        #     except:
+        #         print(k, v['input_ids'].size(), list(v['token_type_ids']))
+        #         print(list(v['attention_mask']))
         # forward pass
-        outputs = model(input_ids, img_feat, panorama_rotation, view_idx)
+        outputs = model(input_ids, img_feat, act_seq, view_idx, attention_mask)
+        pred_dir, pred_dis = outputs
         
         # Pretrain waypoint predictor/ view selector
-        if self.train_predictor:
-            l2_loss = nn.MSELoss()
-            training_loss = l2_loss(outputs.view(-1), target_coord)
-        else:
-            # bce_loss = nn.BCEWithLogitsLoss()
-            ce_loss = nn.CrossEntropyLoss()
-            training_loss = ce_loss(outputs, target_view.flatten())
+        l2_loss = nn.MSELoss()
+        ce_loss = nn.CrossEntropyLoss()
+        
+        distance_loss = l2_loss(pred_dis.view(-1), target_coord)
+        direction_loss = ce_loss(pred_dir, target_view)
+        training_loss = distance_loss*2 + direction_loss
 
         loss_metric = {
             "training_loss": training_loss.item(),
+            "distance_loss": distance_loss.item(),
+            'direction_loss': direction_loss.item()
         }
 
         return (training_loss, outputs, loss_metric) if return_outputs else (training_loss, loss_metric)
@@ -110,46 +110,46 @@ class PretrainTrainer(Trainer):
         model.eval()
 
         l1_loss = nn.L1Loss(reduction='sum')
-        bce_loss = nn.BCEWithLogitsLoss(reduction='sum')
         ce_loss = nn.CrossEntropyLoss(reduction='sum')
         data_num = 0
-        avg_loss = 0
-        avg_correct = 0
-        avg_entropy = 0
+        direction_loss = 0
+        distance_loss = 0
+        distance_correct = 0
+        direction_correct = 0
 
         for i, (inputs) in enumerate(tqdm(eval_dataloader)):
             if len(inputs['target_view']) != self.args.train_batch_size:
                 continue
             inputs = self._prepare_inputs(inputs)
-            input_ids = inputs['input_ids']
-            img_feat = inputs['img_feat']
-            panorama_rotation = inputs['panorama_rotation']
-            view_idx = inputs['view_idx']
             with torch.no_grad():
+                input_ids = inputs['input_ids']
+                img_feat = inputs['img_feat']
+                act_seq = inputs['act_seq']
+                view_idx = inputs['view_idx']
                 target_coord = inputs['target_coord']
                 target_view = inputs['target_view']
+                attention_mask = inputs['attention_mask']
 
-                outputs = model(input_ids, img_feat, panorama_rotation, view_idx)
-
+                outputs = model(input_ids, img_feat, act_seq, view_idx, attention_mask)
+                pred_dir, pred_dis = outputs
                 data_num += target_coord.size(0)
 
-                if self.train_predictor:
-                    avg_loss += l1_loss(outputs.view(-1), target_coord.view(-1)).item()
-                    quantize = torch.round(outputs / 0.25) * 0.25
-                    # correct = torch.sum(torch.all(quantize == target_coord.view(-1, 2), dim=1))
-                    correct = torch.sum(torch.all(quantize == target_coord.unsqueeze(1), dim=1))
-                else:
-                    avg_loss += ce_loss(outputs, target_view.flatten()).item()
-                    # label_idx = torch.argmax(target_view.view(-1,4), dim=1)
-                    label_idx = target_view.flatten()
-                    prediction = torch.argmax(outputs, dim=1)
-                    correct = torch.sum(prediction == label_idx)
+                distance_loss += l1_loss(pred_dis.view(-1), target_coord.view(-1)).item()
+                quantize = torch.round(pred_dis / 0.25) * 0.25
+                correct = torch.sum(torch.all(quantize == target_coord.unsqueeze(1), dim=1))
+                distance_correct += correct.item()
 
-                avg_correct += correct.item()
+                direction_loss += ce_loss(pred_dir, target_view.flatten()).item()
+                label_idx = target_view.flatten()
+                prediction = torch.argmax(pred_dir, dim=1)
+                correct = torch.sum(prediction == label_idx)
+                direction_correct += correct.item()
 
         metrics = {
-            "validation_loss": avg_loss / data_num,
-            "validation_acc": avg_correct / data_num,
+            "direction_loss": direction_loss / data_num,
+            "direction_acc": direction_correct / data_num,
+            "distance_loss": distance_loss / data_num,
+            "distance_acc": distance_correct / data_num,
         }
         print(metrics)
 

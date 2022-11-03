@@ -1,0 +1,1 @@
+from .action_transformer import VLN_Navigator
