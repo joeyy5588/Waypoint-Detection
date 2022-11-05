@@ -31,8 +31,9 @@ training_args = TrainingArguments(
     warmup_ratio=0.1,
     per_device_train_batch_size=batch_size,
     per_device_eval_batch_size=batch_size,
-    # dataloader_num_workers=8,
+    # dataloader_num_workers=4,
     num_train_epochs=20,
+    # max_steps=200,
     weight_decay=0.0001,
     logging_steps=20,
     save_steps=save_steps,
@@ -51,12 +52,12 @@ trainer = ActionTrainer(
 
 # trainer.train()
 
-# from pyinstrument import Profiler
-# profiler = Profiler()
-# profiler.start()
+from pyinstrument import Profiler
+profiler = Profiler()
+profiler.start()
 trainer.train()
-# profiler.stop()
-# print(profiler.output_text(unicode=True, color=True, show_all=True))
+profiler.stop()
+print(profiler.output_text(unicode=True, color=True, show_all=True))
 
 # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, with_stack=True) as prof:
 #     train_dataloader = trainer.get_train_dataloader()

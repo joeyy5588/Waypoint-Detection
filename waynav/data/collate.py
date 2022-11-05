@@ -126,15 +126,18 @@ class Action_Collator:
 
     def __call__(self, batch):
 
-        input_id, all_img_feats, view_idx_lists, actseq_list, trg_direction, trg_distance = [], [], [], [], [], []
+        input_id, all_img_feats, view_idx_lists, actseq_list, \
+        distance_list, timestep_list, trg_direction, trg_distance = [], [], [], [], [], [], [], []
 
         for data in batch:
             input_id.append(data[0])
             all_img_feats.append(data[1])
             view_idx_lists.append(data[2])
             actseq_list.append(data[3])
-            trg_direction.append(data[4])
-            trg_distance.append(data[5])
+            distance_list.append(data[4])
+            timestep_list.append(data[5])
+            trg_direction.append(data[6])
+            trg_distance.append(data[7])
 
         trg_direction = torch.LongTensor(trg_direction)
         trg_distance = torch.tensor(trg_distance)
@@ -149,10 +152,20 @@ class Action_Collator:
             padding=self.padding,
             return_tensors=self.return_tensors,
         )
+        distance_list = self.tokenizer.pad(
+            {"input_ids": distance_list},
+            padding=self.padding,
+            return_tensors=self.return_tensors,
+        )
+        timestep_list = self.tokenizer.pad(
+            {"input_ids": timestep_list},
+            padding=self.padding,
+            return_tensors=self.return_tensors,
+        )
         # img_feat = torch.stack(all_img_feats, dim=0)
         # view_idx = torch.stack(view_idx_lists, dim=0)
 
-        img_feat = torch.tensor(np.array(all_img_feats))
+        img_feat = torch.tensor(np.array(all_img_feats)).float()
         view_idx = torch.tensor(np.array(view_idx_lists)).long()
         img_feat_attn_mask = torch.ones(len(batch), 8).long()
         all_attn_mask = torch.cat((input_ids['attention_mask'], img_feat_attn_mask, actseq_list['attention_mask']),dim=1)
@@ -162,6 +175,8 @@ class Action_Collator:
             'img_feat': img_feat,
             'view_idx': view_idx,
             'act_seq': actseq_list['input_ids'],
+            'act_dist': distance_list['input_ids'],
+            'act_step': timestep_list['input_ids'],
             'target_view': trg_direction,
             'target_coord': trg_distance,
             'attention_mask': all_attn_mask,

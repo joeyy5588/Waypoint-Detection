@@ -29,6 +29,24 @@ class Img_Feature_Embedding(nn.Module):
 
         return visual_feat
 
+class ActSeq_Embedding(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.action_embeddings = nn.Embedding(7, config.hidden_size)
+        self.distance_embeddings = nn.Embedding(41, config.hidden_size)
+        self.step_embeddings = nn.Embedding(15, config.hidden_size)
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def forward(self, act_seq, act_dist, act_step):
+        act_embed = self.action_embeddings(act_seq)
+        dist_embed = self.distance_embeddings(act_dist)
+        step_embed = self.step_embeddings(act_step)
+        embeddings = act_embed + dist_embed + step_embed
+        embeddings = self.LayerNorm(embeddings)
+        embeddings = self.dropout(embeddings)
+        return embeddings
+
 class VLN_Encoder(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
@@ -37,16 +55,17 @@ class VLN_Encoder(BertPreTrainedModel):
         self.image_embeddings = Img_Feature_Embedding(config.hidden_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.view_embeddings = Rotation_Embeddings(config)
-        self.action_embeddings = nn.Embedding(48, config.hidden_size)
+        self.actseq_embeddings = ActSeq_Embedding(config)
         self.encoder = BertEncoder(config)
         self.pooler = BertPooler(config)
         self.post_init()
 
-    def forward(self, input_ids, img_feat, act_seq, view_idx, attention_mask):
+    def forward(self, input_ids, img_feat, act_seq, act_dist, act_step, view_idx, attention_mask):
         view_idx_embeddings = self.view_embeddings(view_idx)
         resnet_embeddings = self.image_embeddings(img_feat)
-        img_embeddings = self.dropout(resnet_embeddings+view_idx_embeddings)
-        action_embeddings = self.action_embeddings(act_seq)
+        img_embeddings = resnet_embeddings + view_idx_embeddings
+        # img_embeddings = self.dropout(img_embeddings)
+        action_embeddings = self.actseq_embeddings(act_seq, act_dist, act_step)
 
         word_embeddings = self.embeddings(input_ids['input_ids'], token_type_ids=input_ids['token_type_ids'])
         input_feats = torch.cat([word_embeddings, img_embeddings, action_embeddings], dim=1)
@@ -82,8 +101,8 @@ class VLN_Navigator(BertPreTrainedModel):
         self.distance_predictor = nn.Linear(config.hidden_size, 1)
         self.post_init()
 
-    def forward(self, input_ids, img_feat, act_seq, view_idx, attention_mask):
-        pooled_output = self.encoder(input_ids, img_feat, act_seq, view_idx, attention_mask)
+    def forward(self, input_ids, img_feat, act_seq, act_dist, act_step, view_idx, attention_mask):
+        pooled_output = self.encoder(input_ids, img_feat, act_seq, act_dist, act_step, view_idx, attention_mask)
         pooled_output = self.dropout(pooled_output)
         direction = self.direction_predictor(pooled_output)
         distance = self.distance_predictor(pooled_output)

@@ -72,6 +72,8 @@ class ActionTrainer(Trainer):
         input_ids = inputs['input_ids']
         img_feat = inputs['img_feat']
         act_seq = inputs['act_seq']
+        act_dist = inputs['act_dist']
+        act_step = inputs['act_step']
         view_idx = inputs['view_idx']
         target_coord = inputs['target_coord']
         target_view = inputs['target_view']
@@ -83,7 +85,7 @@ class ActionTrainer(Trainer):
         #         print(k, v['input_ids'].size(), list(v['token_type_ids']))
         #         print(list(v['attention_mask']))
         # forward pass
-        outputs = model(input_ids, img_feat, act_seq, view_idx, attention_mask)
+        outputs = model(input_ids, img_feat, act_seq, act_dist, act_step, view_idx, attention_mask)
         pred_dir, pred_dis = outputs
         
         # Pretrain waypoint predictor/ view selector
@@ -125,12 +127,14 @@ class ActionTrainer(Trainer):
                 input_ids = inputs['input_ids']
                 img_feat = inputs['img_feat']
                 act_seq = inputs['act_seq']
+                act_dist = inputs['act_dist']
+                act_step = inputs['act_step']
                 view_idx = inputs['view_idx']
                 target_coord = inputs['target_coord']
                 target_view = inputs['target_view']
                 attention_mask = inputs['attention_mask']
 
-                outputs = model(input_ids, img_feat, act_seq, view_idx, attention_mask)
+                outputs = model(input_ids, img_feat, act_seq, act_dist, act_step, view_idx, attention_mask)
                 pred_dir, pred_dis = outputs
                 data_num += target_coord.size(0)
 
