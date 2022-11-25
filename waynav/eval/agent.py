@@ -7,19 +7,28 @@ from waynav.gen.utils.py_util import walklevel
 from waynav.env.thor_env import ThorEnv
 from waynav.data.dataset import Panorama_Dataset
 from transformers import AutoTokenizer
+from .detection_utils import build_detection_model
 import math
+import torch
 
 class Eval_Agent(object):
-    def __init__(self, args, model):
+    def __init__(self, args):
+        # Path for testing data
         data_path = args.data_path
         save_path = args.save_path
         split = data_path.split('/')[-1]
-        waypoint_path = '/mnt/alfworld/data/panorama_' + split
+        # Path for self-extracted waypoint data
+        waypoint_path = '/data/joey/data/panorama_' + split
         self.args = args
         self.traj_list = []
         self.waypoint_list = []
         self.model = model
-        self.tokenizer = AutoTokenizer.from_pretrained("prajjwal1/bert-medium")
+        self.detection_object = '/home/joey/vln_detector/ckpt/newdata_object'
+        self.detection_recep = '/home/joey/vln_detector/ckpt/newdata_recep'
+        self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+
+        self.detection_model = build_detection_model(args)
+        quit()
 
         # cache
         cache_file = os.path.join(args.save_path, "cache.json")
@@ -142,6 +151,8 @@ class Eval_Agent(object):
             current_instruction = waypoint_data['instructions'][progress_indicator-1]
 
             rgb_image, depth_image = self.get_panorama_image(env, event)
+            rgb_image = 
+            patch_feat, roi_feat, obj_cls = self.get_detection_output(rgb_image)
             input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation = \
             Panorama_Dataset.process_test_time_data(self.tokenizer, rgb_image, depth_image, current_instruction)
             
@@ -335,4 +346,7 @@ class Eval_Agent(object):
             'br': br_meta, 'mr': mr_meta, 'tr': tr_meta,
             'bb': bb_meta, 'mb': mb_meta, 'tb': tb_meta
         }
+        rgb_list = [ml, mc, mr, mb, bl, bc, br, bb]
+        rgb_list = [torch.from_numpy(x) for x in rgb_list]
+        rgb_list = [x.view([300, 300, 1, 3]).permute(2,3,0,1)]
         return rgb_image, mask_image, depth_image, color_to_obj_id_type, event

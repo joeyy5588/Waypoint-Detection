@@ -81,11 +81,11 @@ class PretrainTrainer(Trainer):
         input_ids = inputs['input_ids']
         img_feat = inputs['img_feat']
         panorama_rotation = inputs['panorama_rotation']
-        view_idx = inputs['view_idx']
+        # view_idx = inputs['view_idx']
         target_coord = inputs['target_coord']
         target_view = inputs['target_view']
         # forward pass
-        outputs = model(input_ids, img_feat, panorama_rotation, view_idx)
+        outputs = model(input_ids, img_feat, panorama_rotation)
         
         # Pretrain waypoint predictor/ view selector
         if self.train_predictor:
@@ -124,12 +124,12 @@ class PretrainTrainer(Trainer):
             input_ids = inputs['input_ids']
             img_feat = inputs['img_feat']
             panorama_rotation = inputs['panorama_rotation']
-            view_idx = inputs['view_idx']
+            # view_idx = inputs['view_idx']
             with torch.no_grad():
                 target_coord = inputs['target_coord']
                 target_view = inputs['target_view']
 
-                outputs = model(input_ids, img_feat, panorama_rotation, view_idx)
+                outputs = model(input_ids, img_feat, panorama_rotation)
 
                 data_num += target_coord.size(0)
 
@@ -148,8 +148,8 @@ class PretrainTrainer(Trainer):
                 avg_correct += correct.item()
 
         metrics = {
-            "validation_loss": avg_loss / data_num,
-            "validation_acc": avg_correct / data_num,
+            f"{metric_key_prefix}_loss": avg_loss / data_num,
+            f"{metric_key_prefix}_acc": avg_correct / data_num,
         }
         print(metrics)
 
@@ -582,7 +582,15 @@ class PretrainTrainer(Trainer):
 
         metrics = None
         if self.control.should_evaluate:
-            metrics = self.evaluate(ignore_keys=ignore_keys_for_eval)
+            if isinstance(self.eval_dataset, dict):
+                for eval_dataset_name, eval_dataset in self.eval_dataset.items():
+                    metrics = self.evaluate(
+                        eval_dataset=eval_dataset,
+                        ignore_keys=ignore_keys_for_eval,
+                        metric_key_prefix=f"eval_{eval_dataset_name}",
+                    )
+            else:
+                metrics = self.evaluate(ignore_keys=ignore_keys_for_eval)
             self._report_to_hp_search(trial, self.state.global_step, metrics)
 
         if self.control.should_save:

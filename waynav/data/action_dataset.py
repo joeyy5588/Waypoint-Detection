@@ -18,10 +18,13 @@ class Action_Dataset:
 
         self.traj_list = []
         self.img_fn_list = []
+
         self.img_feat_list = []
-        self.feat_obj_list = []
         self.class_name_list = []
-        self.feat_recep_list = []
+
+        self.starting_view_list = []
+        self.start_class_name_list = []
+
         self.actseq_list = []
         self.target_act = []
         self.actseq_len = 20
@@ -38,21 +41,21 @@ class Action_Dataset:
                         continue
                     for nav_point_idx in range(len(traj_data["navigation_point"])):
                         nav_point = traj_data["navigation_point"][nav_point_idx]
-                        # x_diff = traj_x[nav_point+1] - traj_x[nav_point]
-                        # z_diff = traj_z[nav_point+1] - traj_z[nav_point]
-                        # if x_diff == 0 and z_diff == 0:
-                        #     continue
+                        starting_point = traj_data["navigation_point"][starting_idx[nav_point_idx]]
+
                         self.traj_list.append(traj_data)
-                        self.img_fn_list.append(os.path.join(root_dir, n, trial, 'images', str(nav_point).zfill(9) + '.png'))
-                        # obj_feat = [os.path.join(root_dir, n, trial, 'objects', str(nav_point).zfill(9) + '_' + str(x) + '.npz') for x in range(4, 12)]
-                        # recep_feat = [os.path.join(root_dir, n, trial, 'receptacles', str(nav_point).zfill(9) + '_' + str(x) + '.npz') for x in range(4, 12)]
-                        class_name = os.path.join(root_dir, n, trial, 'class_name', str(nav_point).zfill(9))
+                        self.img_fn_list.append(os.path.join(root_dir.replace('/local1/cfyang', '/data/joey'), n, trial, 'images', str(nav_point).zfill(9) + '.png'))
+                        
+                        class_name = os.path.join(root_dir.replace('/local1/cfyang', '/data/joey'), n, trial, 'class_name', str(nav_point).zfill(9))
                         self.class_name_list.append(class_name)
-                        # self.feat_obj_list.append(obj_feat)
-                        # self.feat_recep_list.append(recep_feat)
-                        img_feat = [os.path.join(root_dir, n, trial, 'split_images', str(nav_point).zfill(9) + '_' + str(x) + '.png').encode() for x in range(4, 12)]
-                        # img_feat = [np.load(x) for x in img_feat]
+                        start_class_name = os.path.join(root_dir.replace('/local1/cfyang', '/data/joey'), n, trial, 'class_name', str(starting_point).zfill(9))
+                        self.start_class_name_list.append(start_class_name)
+                        
+                        img_feat = [os.path.join(root_dir.replace('/local1/cfyang', '/data/joey'), n, trial, 'split_images', str(nav_point).zfill(9) + '_' + str(x) + '.png').encode() for x in range(4, 12)]
+                        start_feat = [os.path.join(root_dir.replace('/local1/cfyang', '/data/joey'), n, trial, 'split_images', str(starting_point).zfill(9) + '_' + str(x) + '.png').encode() for x in range(4, 12)]
                         self.img_feat_list.append(img_feat)
+                        self.starting_view_list.append(start_feat)
+                        
                         self.target_act.append(target_act[nav_point_idx])
                         self.actseq_list.append(actseq[starting_idx[nav_point_idx]:nav_point_idx+1])
 
@@ -69,47 +72,107 @@ class Action_Dataset:
         img_path = self.img_fn_list[idx]
         traj_data = self.traj_list[idx]
         nav_point = int(img_path.split('images/')[1].split('.')[0])
+
         class_name_dict = self.class_name_dict[self.class_name_list[idx]]
-        # obj_feat = self.feat_obj_list[idx]
-        # recep_feat = self.feat_recep_list[idx]
-        # obj_feat = [np.load(x) for x in obj_feat]
-        # recep_feat = [np.load(x) for x in recep_feat]
+        start_class_name_dict = self.class_name_dict[self.start_class_name_list[idx]]
+
         resnet_feat = self.img_feat_list[idx]
+        start_resnet_feat = self.starting_view_list[idx]
+
         target_act = self.target_act[idx]
         actseq = self.actseq_list[idx]
 
+        direction, trg_distance = target_act.split('_')
+        if direction == 'left':
+            trg_direction = 0
+        elif direction == 'front':
+            trg_direction = 1
+        elif direction == 'right':
+            trg_direction = 2
+        elif direction == 'back':
+            trg_direction = 3
+
+        trg_distance = float(trg_distance)
+
         instruction = traj_data['instructions'][nav_point]
         input_ids = self.tokenizer(instruction)
+        obj_input_ids = 0
+
         all_img_feats = []
+        # For direction
         view_idx_lists = []
+        # For starting/current point
+        view_step_lists = []
 
         with self.env.begin(write=False) as txn:
+
             for i in range(4):
-                # obj_list = list(obj_feat[i]['pred_class']) + list(recep_feat[i]['pred_class']) \
-                # + list(obj_feat[i+4]['pred_class']) + list(recep_feat[i+4]['pred_class'])   
-                # combined_obj_list = list(set(obj_list))
-                combined_obj_list = class_name_dict[i]
-                obj_input_id = self.tokenizer(' '.join(combined_obj_list))
-                for k, v in obj_input_id.items():
-                    # Remove the CLS token
-                    list_to_add = obj_input_id[k][1:]
-                    if k == 'token_type_ids':
-                        list_to_add = [x+1+i for x in list_to_add]
+                if i == trg_direction:
+                    res_feat = txn.get(resnet_feat[i])
+                    res_feat = np.frombuffer(res_feat, dtype=np.float16).reshape(2048,10,10)
+                    all_img_feats.append(res_feat)
 
-                    input_ids[k] += list_to_add
+                    res_feat = txn.get(resnet_feat[i+4])
+                    res_feat = np.frombuffer(res_feat, dtype=np.float16).reshape(2048,10,10)
+                    all_img_feats.append(res_feat)
 
-                res_feat = txn.get(resnet_feat[i])
-                res_feat = np.frombuffer(res_feat, dtype=np.float16).reshape(2048,10,10)
-                all_img_feats.append(res_feat)
+                    view_idx_lists.append(i+1)
+                    view_idx_lists.append(i+1)
 
-                res_feat = txn.get(resnet_feat[i+4])
-                res_feat = np.frombuffer(res_feat, dtype=np.float16).reshape(2048,10,10)
-                all_img_feats.append(res_feat)
+                    view_step_lists.append(1)
+                    view_step_lists.append(1)
 
-                view_idx_lists.append(i+1)
-                view_idx_lists.append(i+1)
+            # for i in range(4):
+            #     res_feat = txn.get(start_resnet_feat[i])
+            #     res_feat = np.frombuffer(res_feat, dtype=np.float16).reshape(2048,10,10)
+            #     all_img_feats.append(res_feat)
+
+            #     res_feat = txn.get(start_resnet_feat[i+4])
+            #     res_feat = np.frombuffer(res_feat, dtype=np.float16).reshape(2048,10,10)
+            #     all_img_feats.append(res_feat)
+
+            #     view_idx_lists.append(i+1)
+            #     view_idx_lists.append(i+1)
+
+            #     view_step_lists.append(2)
+            #     view_step_lists.append(2)
+            
+            
 
         all_img_feats = np.array(all_img_feats)
+
+
+        # Object words for current point
+        for i in range(4):
+            if i == trg_direction:
+                combined_obj_list = class_name_dict[i]
+                obj_input_id = self.tokenizer(' '.join(combined_obj_list))
+            # if i == 0:
+                obj_input_ids = obj_input_id
+                view_step_lists += [1] * len(obj_input_id["input_ids"])
+                view_idx_lists += [i+1] * len(obj_input_id["input_ids"])
+            # else:
+            #     for k, v in obj_input_id.items():
+            #         # Remove the CLS token
+            #         list_to_add = obj_input_id[k][1:]
+            #         obj_input_ids[k] += list_to_add
+
+            #     view_step_lists += [1] * (len(obj_input_id["input_ids"])-1)
+            #     view_idx_lists += [i+1] * (len(obj_input_id["input_ids"])-1)
+
+        # Object words for starting point
+        # for i in range(4):
+        #     combined_obj_list = start_class_name_dict[i]
+        #     obj_input_id = self.tokenizer(' '.join(combined_obj_list))
+            
+        #     for k, v in obj_input_id.items():
+        #         # Remove the CLS token
+        #         list_to_add = obj_input_id[k][1:]
+        #         obj_input_ids[k] += list_to_add
+
+        #     view_step_lists += [2] * (len(obj_input_id["input_ids"])-1)
+        #     view_idx_lists += [i+1] * (len(obj_input_id["input_ids"])-1)
+
 
         actseq_list = []
         distance_list = []
@@ -133,19 +196,9 @@ class Action_Dataset:
             
             distance_list.append(distance)
 
-        direction, trg_distance = target_act.split('_')
-        if direction == 'left':
-            trg_direction = 0
-        elif direction == 'front':
-            trg_direction = 1
-        elif direction == 'right':
-            trg_direction = 2
-        elif direction == 'back':
-            trg_direction = 3
-
-        trg_distance = float(trg_distance)
+        
         # view_idx_lists = torch.LongTensor(view_idx_lists)
-        return input_ids, all_img_feats, view_idx_lists, actseq_list, distance_list, timestep_list, trg_direction, trg_distance
+        return input_ids, obj_input_ids, all_img_feats, view_step_lists, view_idx_lists, actseq_list, distance_list, timestep_list, trg_direction, trg_distance
 
     def traj_2_actseq(self, traj_data):
         traj_x = traj_data['traj']['x']

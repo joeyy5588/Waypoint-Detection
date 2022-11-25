@@ -70,22 +70,25 @@ class ActionTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False):
         input_ids = inputs['input_ids']
+        obj_input_ids = inputs['obj_input_ids']
         img_feat = inputs['img_feat']
         act_seq = inputs['act_seq']
         act_dist = inputs['act_dist']
         act_step = inputs['act_step']
         view_idx = inputs['view_idx']
+        view_step = inputs['view_step']
         target_coord = inputs['target_coord']
         target_view = inputs['target_view']
         attention_mask = inputs['attention_mask']
+        print(target_coord)
         # for k, v in inputs.items():
         #     try:
         #         print(k, v.size())
         #     except:
-        #         print(k, v['input_ids'].size(), list(v['token_type_ids']))
-        #         print(list(v['attention_mask']))
+        #         print(k, v['input_ids'].size())
         # forward pass
-        outputs = model(input_ids, img_feat, act_seq, act_dist, act_step, view_idx, attention_mask)
+        outputs = model(input_ids, obj_input_ids, img_feat, act_seq, act_dist, \
+        act_step, view_idx, view_step, attention_mask)
         pred_dir, pred_dis = outputs
         
         # Pretrain waypoint predictor/ view selector
@@ -93,13 +96,14 @@ class ActionTrainer(Trainer):
         ce_loss = nn.CrossEntropyLoss()
         
         distance_loss = l2_loss(pred_dis.view(-1), target_coord)
-        direction_loss = ce_loss(pred_dir, target_view)
-        training_loss = distance_loss*2 + direction_loss
+        # direction_loss = ce_loss(pred_dir, target_view)
+        # training_loss = distance_loss*2 + direction_loss
+        training_loss = distance_loss
 
         loss_metric = {
             "training_loss": training_loss.item(),
             "distance_loss": distance_loss.item(),
-            'direction_loss': direction_loss.item()
+            # "direction_loss": direction_loss.item()
         }
 
         return (training_loss, outputs, loss_metric) if return_outputs else (training_loss, loss_metric)
@@ -125,16 +129,19 @@ class ActionTrainer(Trainer):
             inputs = self._prepare_inputs(inputs)
             with torch.no_grad():
                 input_ids = inputs['input_ids']
+                obj_input_ids = inputs['obj_input_ids']
                 img_feat = inputs['img_feat']
                 act_seq = inputs['act_seq']
                 act_dist = inputs['act_dist']
                 act_step = inputs['act_step']
                 view_idx = inputs['view_idx']
+                view_step = inputs['view_step']
                 target_coord = inputs['target_coord']
                 target_view = inputs['target_view']
                 attention_mask = inputs['attention_mask']
 
-                outputs = model(input_ids, img_feat, act_seq, act_dist, act_step, view_idx, attention_mask)
+                outputs = model(input_ids, obj_input_ids, img_feat, act_seq, act_dist, \
+                act_step, view_idx, view_step, attention_mask)
                 pred_dir, pred_dis = outputs
                 data_num += target_coord.size(0)
 
@@ -143,17 +150,17 @@ class ActionTrainer(Trainer):
                 correct = torch.sum(torch.all(quantize == target_coord.unsqueeze(1), dim=1))
                 distance_correct += correct.item()
 
-                direction_loss += ce_loss(pred_dir, target_view.flatten()).item()
-                label_idx = target_view.flatten()
-                prediction = torch.argmax(pred_dir, dim=1)
-                correct = torch.sum(prediction == label_idx)
-                direction_correct += correct.item()
+                # direction_loss += ce_loss(pred_dir, target_view.flatten()).item()
+                # label_idx = target_view.flatten()
+                # prediction = torch.argmax(pred_dir, dim=1)
+                # correct = torch.sum(prediction == label_idx)
+                # direction_correct += correct.item()
 
         metrics = {
-            "direction_loss": direction_loss / data_num,
-            "direction_acc": direction_correct / data_num,
-            "distance_loss": distance_loss / data_num,
-            "distance_acc": distance_correct / data_num,
+            # f"{metric_key_prefix}_direction_loss": direction_loss / data_num,
+            # f"{metric_key_prefix}_direction_acc": direction_correct / data_num,
+            f"{metric_key_prefix}_distance_loss": distance_loss / data_num,
+            f"{metric_key_prefix}_distance_acc": distance_correct / data_num,
         }
         print(metrics)
 
@@ -586,8 +593,17 @@ class ActionTrainer(Trainer):
 
         metrics = None
         if self.control.should_evaluate:
-            metrics = self.evaluate(ignore_keys=ignore_keys_for_eval)
+            if isinstance(self.eval_dataset, dict):
+                for eval_dataset_name, eval_dataset in self.eval_dataset.items():
+                    metrics = self.evaluate(
+                        eval_dataset=eval_dataset,
+                        ignore_keys=ignore_keys_for_eval,
+                        metric_key_prefix=f"eval_{eval_dataset_name}",
+                    )
+            else:
+                metrics = self.evaluate(ignore_keys=ignore_keys_for_eval)
             self._report_to_hp_search(trial, self.state.global_step, metrics)
+
 
         if self.control.should_save:
             self._save_checkpoint(model, trial, metrics=metrics)

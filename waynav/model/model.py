@@ -340,16 +340,16 @@ class ROI_Encoder(BertPreTrainedModel):
         self.pooler = BertPooler(config)
         self.post_init()
 
-    def forward(self, input_ids, img_feat, panorama_rotation, view_idx):
-        # view_embeddings = self.view_embeddings(panorama_rotation)
-        view_idx_embeddings = self.view_embeddings(view_idx)
+    def forward(self, input_ids, img_feat, panorama_rotation):
+        view_embeddings = self.view_embeddings(panorama_rotation)
+        # view_idx_embeddings = self.view_embeddings(view_idx)
         img_embeddings = self.image_embeddings(img_feat)
-        roi_embeddings = self.dropout(img_embeddings+view_idx_embeddings)
-        # roi_embeddings = self.dropout(img_embeddings)
+        # roi_embeddings = self.dropout(img_embeddings+view_idx_embeddings)
+        roi_embeddings = self.dropout(img_embeddings)
 
         word_embeddings = self.embeddings(input_ids['input_ids'], token_type_ids=input_ids['token_type_ids'])
-        # input_feats = torch.cat([word_embeddings, view_embeddings, roi_embeddings], dim=1)
-        input_feats = torch.cat([word_embeddings, roi_embeddings], dim=1)
+        input_feats = torch.cat([word_embeddings, view_embeddings, roi_embeddings], dim=1)
+        # input_feats = torch.cat([word_embeddings, roi_embeddings], dim=1)
         encoder_outputs = self.encoder(input_feats)
         pooled_output = self.pooler(encoder_outputs[0])
 

@@ -1,30 +1,34 @@
 import torch
-from waynav.data.pretrain_dataset import Pretrain_Dataset
+from waynav.data import Pretrain_Dataset
 from waynav.data.collate import Pretrain_Collator
 from waynav.model.model import View_Selector, ROI_Waypoint_Predictor
 from waynav.trainer.pretrain_trainer import PretrainTrainer
 from transformers import TrainingArguments, AutoConfig
 from torch.utils.data import DataLoader
 
-eval_data_dir = '/data/joey/substep_train'
+eval_data_dir = '/local1/cfyang/substep_valid_seen'
+eval_unseen_data_dir = '/local1/cfyang/substep_valid_unseen'
 single_view = True
 eval_dataset = Pretrain_Dataset(eval_data_dir, single_view=single_view)
+eval_unseen_dataset = Pretrain_Dataset(eval_unseen_data_dir, single_view=single_view)
+eval_dataset_dict = {
+    'seen': eval_dataset,
+    'unseen': eval_unseen_dataset
+}
 tokenizer = eval_dataset.tokenizer
 data_collator = Pretrain_Collator(tokenizer)
 
 config = AutoConfig.from_pretrained('bert-base-uncased')
 if single_view:
-    model = ROI_Waypoint_Predictor(config).from_pretrained('/data/joey/waypoint/output/predictor/checkpoint-8500')
-    output_path = "/data/joey/waypoint/output/predictor"
+    model = ROI_Waypoint_Predictor(config).from_pretrained('/local1/cfyang/output/waypoint/roi_predictor')
     batch_size = 32
     learning_rate = 5e-5
 else:
     model = View_Selector(config)
-    output_path = "/data/joey/waypoint/output/view_selector"
     batch_size = 8
     learning_rate = 1e-4
 
-output_path = "/data/joey/waypoint/output/test"
+output_path = "/local1/cfyang/output/waypoint/test"
 
 
 training_args = TrainingArguments(
@@ -44,11 +48,16 @@ trainer = PretrainTrainer(
     model=model,
     args=training_args,
     train_dataset=eval_dataset,
-    eval_dataset=eval_dataset,
+    eval_dataset=eval_dataset_dict,
     tokenizer=tokenizer,
     data_collator=data_collator,
     train_predictor=single_view,
 )
 
-trainer.evaluate()
+for eval_dataset_name, eval_dataset in trainer.eval_dataset.items():
+    metrics = trainer.evaluate(
+        eval_dataset=eval_dataset,
+        metric_key_prefix=f"eval_{eval_dataset_name}",
+    )
+
 
