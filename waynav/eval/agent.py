@@ -6,8 +6,10 @@ import numpy as np
 from waynav.gen.utils.py_util import walklevel
 from waynav.env.thor_env import ThorEnv
 from waynav.data.dataset import Panorama_Dataset
-from transformers import AutoTokenizer
-from .detection_utils import build_detection_model
+from transformers import AutoTokenizer, AutoConfig
+from .detection_utils import Detection_Helper
+from waynav.model import VLN_Navigator, ROI_Waypoint_Predictor
+from .navigation_utils import prepare_direction_input, prepare_distance_input, predict_direction, predict_distance
 import math
 import torch
 
@@ -18,17 +20,22 @@ class Eval_Agent(object):
         save_path = args.save_path
         split = data_path.split('/')[-1]
         # Path for self-extracted waypoint data
-        waypoint_path = '/data/joey/data/panorama_' + split
+        waypoint_path = '/data/joey/panorama_' + split
         self.args = args
         self.traj_list = []
         self.waypoint_list = []
-        self.model = model
-        self.detection_object = '/home/joey/vln_detector/ckpt/newdata_object'
-        self.detection_recep = '/home/joey/vln_detector/ckpt/newdata_recep'
+        # self.model = model
         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
-        self.detection_model = build_detection_model(args)
-        quit()
+        self.object_model = Detection_Helper(args, args.object_model_path)
+        self.recep_model = Detection_Helper(args, args.recep_model_path, object_types='receptacles')
+
+        config = AutoConfig.from_pretrained('bert-base-uncased')
+        self.distance_model = ROI_Waypoint_Predictor(config).from_pretrained(args.distance_model_path)
+
+        config.update({'num_hidden_layers': 12})
+        config.update({'type_vocab_size': 5})
+        self.direction_model = VLN_Navigator(config).from_pretrained(args.direction_model_path)
 
         # cache
         cache_file = os.path.join(args.save_path, "cache.json")
@@ -54,32 +61,32 @@ class Eval_Agent(object):
                 self.waypoint_list.append(waypoint_file)
                 self.traj_list.append(json_file)
 
+
     def run(self):
         env = ThorEnv(player_screen_width=300, player_screen_height=300)
         traj_list = self.traj_list
         finished_list = self.finished_list
         waypoint_list = self.waypoint_list
 
-        direct_success = 0
-        approx_success = 0
-        nav_fail = 0 
-        teleport_fail = 0
+        trial_num = 0
+        trial_success = 0
+        goal_num = 0
+        goal_success = 0
         while len(traj_list) > 0:
             json_file = traj_list.pop()
             waypoint_file = waypoint_list.pop()
 
             print ("(%d Left) Evaluating: %s" % (len(traj_list), json_file))
             try:
-                predict_waypoint, success = self.predict_waypoint(env, json_file, waypoint_file)
+                predict_waypoint, complete_goals, total_goals = self.predict_waypoint(env, json_file, waypoint_file)
                 # self.plot_waypoint(waypoint_file, predict_waypoint)
-                if success == 1:
-                    direct_success += 1
-                elif success == 0.5:
-                    approx_success += 1
-                elif success == -1:
-                    teleport_fail += 1
-                else:
-                    nav_fail += 1
+                trial_num += 1
+                if complete_goals == total_goals:
+                    trial_success += 1
+                goal_num += total_goals
+                goal_success += complete_goals
+
+                print("Complete %d/%d tasks, and %d/%d goals."%(trial_success, trial_num, goal_success, goal_num))
                 finished_list.append(json_file)
                 
 
@@ -90,8 +97,7 @@ class Eval_Agent(object):
 
         env.stop()
         print("Finished.")
-        print("Direct Success: %d, Approx Success: %d, Teleport Fail: %d, Navigation Fail: %d"\
-        %(direct_success, approx_success, teleport_fail, nav_fail))
+        print("Task SR: %f, Task GC: %f" %(trial_success/ trial_num, goal_success/goal_num))
 
     @classmethod
     def plot_waypoint(cls, waypoint_file, predict_waypoint):
@@ -119,7 +125,13 @@ class Eval_Agent(object):
 
     def predict_waypoint(self, env, json_file, waypoint_file):
         device='cuda:0'
-        self.model.to(device)
+        self.object_model.to_device(device)
+        self.recep_model.to_device(device)
+        self.distance_model.to(device)
+        self.distance_model.eval()
+
+        self.direction_model.to('cuda:2')
+        self.direction_model.eval()
 
         traj_data = json.load(open(json_file))
         waypoint_data = json.load(open(waypoint_file))
@@ -142,44 +154,74 @@ class Eval_Agent(object):
         env.set_task(traj_data, self.args, reward_type='dense')
 
         fail = 0
-        progress_indicator = 1
+        progress_indicator = 0
+        total_goals = len(navpoint_idx)
+        complete_goals = 0
         predicted_waypoints = []
-        while fail < 4:
+        actseq_list = [1]
+        dist_list = [0]
+        while fail < 14 and complete_goals < total_goals:
             last_event = event
             current_nav_point = \
-            (waypoint_data['traj']['x'][navpoint_idx[progress_indicator]], waypoint_data['traj']['z'][navpoint_idx[progress_indicator]])
-            current_instruction = waypoint_data['instructions'][progress_indicator-1]
+            (waypoint_data['traj']['x'][navpoint_idx[progress_indicator]+1], waypoint_data['traj']['z'][navpoint_idx[progress_indicator]+1])
+            current_instruction = waypoint_data['instructions'][navpoint_idx[progress_indicator]]
 
             rgb_image, depth_image = self.get_panorama_image(env, event)
-            rgb_image = 
-            patch_feat, roi_feat, obj_cls = self.get_detection_output(rgb_image)
-            input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation = \
-            Panorama_Dataset.process_test_time_data(self.tokenizer, rgb_image, depth_image, current_instruction)
-            
-            input_ids['input_ids'] = input_ids['input_ids'].to(device)
-            rgb_list = rgb_list.to(device)
-            depth_list = depth_list.to(device)
-            panorama_angle = panorama_angle.to(device)
-            panorama_rotation = panorama_rotation.to(device)
-            
-            next_action_list = self.model.predict_coordinate(input_ids, rgb_list, depth_list, panorama_angle, panorama_rotation, [last_event.metadata['agent']])
-            next_action = next_action_list[0]
+            with torch.no_grad():
+                patch_feat = self.object_model.extract_cnn_features(rgb_image)
+                obj_cls, obj_box, obj_feat = self.object_model.extract_roi_features(rgb_image)
+                recep_cls, recep_box, recep_feat = self.recep_model.extract_roi_features(rgb_image)
+
+            direction_input = prepare_direction_input(self.tokenizer, patch_feat, obj_cls, recep_cls, current_instruction, actseq_list, dist_list)
+            pred_dir, pred_dist = predict_direction(self.direction_model, direction_input)
+            if pred_dir == 0:
+                event = env.step({'action': 'RotateLeft', 'forceAction': True})
+            elif pred_dir == 2:
+                event = env.step({'action': 'RotateRight', 'forceAction': True})
+            elif pred_dir == 3:
+                event = env.step({'action': 'RotateRight', 'forceAction': True})
+                event = env.step({'action': 'RotateRight', 'forceAction': True})
+
+            # distance_input = prepare_distance_input(self.tokenizer, obj_feat, obj_box, obj_cls, recep_feat, recep_box, recep_cls, current_instruction, pred_dir)
+            # pred_dist = predict_distance(self.distance_model, distance_input)
+
+            move_success = 0
+            for i in range(pred_dist):
+                event = env.step({'action': 'MoveAhead', 'forceAction': True})
+                if event.metadata['lastActionSuccess']:
+                    move_success += 1
+                else:
+                    break
+                    # print(event.metadata['errorMessage'])
+
+            actseq_list.append(pred_dir)
+            dist_list.append(move_success)
+
+            next_action = event.metadata["agent"]['position']
+            # print(last_event.metadata["agent"]['position'], current_nav_point, next_action, pred_dir, pred_dist)
             predicted_waypoints.append((next_action['x'], next_action['z']))
             if (next_action['x'], next_action['z']) == current_nav_point:
+                progress_indicator += 1
+                complete_goals += 1
+                fail = 0
+                actseq_list = [1]
+                dist_list = [0]
                 print("Direct Success!")
-                return predicted_waypoints, 1
             elif abs(next_action['x'] - current_nav_point[0]) + abs(next_action['z'] - current_nav_point[1]) < 0.5:
-                print(next_action['x'], next_action['z'], current_nav_point)
+                # print(next_action['x'], next_action['z'], current_nav_point)
+                progress_indicator += 1
+                complete_goals += 1
+                fail = 0
+                actseq_list = [1]
+                dist_list = [0]
                 print("Approximate Success!")
-                return predicted_waypoints, 0.5
             else:
-                event = env.step(next_action)
                 fail+=1
-                if not event.metadata['lastActionSuccess']:
-                    print("Cannot teleport to here")
-                    return predicted_waypoints, -1
+                # if not event.metadata['lastActionSuccess']:
+                #     print("Cannot move to here")
+                #     return predicted_waypoints, -1
 
-        return predicted_waypoints, 0
+        return predicted_waypoints, complete_goals, total_goals
 
     def get_panorama_image(self, env, event):
         yaw = round(event.metadata["agent"]['cameraHorizon'])
@@ -347,6 +389,5 @@ class Eval_Agent(object):
             'bb': bb_meta, 'mb': mb_meta, 'tb': tb_meta
         }
         rgb_list = [ml, mc, mr, mb, bl, bc, br, bb]
-        rgb_list = [torch.from_numpy(x) for x in rgb_list]
-        rgb_list = [x.view([300, 300, 1, 3]).permute(2,3,0,1)]
-        return rgb_image, mask_image, depth_image, color_to_obj_id_type, event
+        
+        return rgb_list, mask_image, depth_image, color_to_obj_id_type, event

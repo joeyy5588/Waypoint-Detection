@@ -222,8 +222,9 @@ class VLN_Navigator(BertPreTrainedModel):
         self.pooler = BertPooler(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         # self.classifier = nn.Linear(config.hidden_size*4, 9)
-        # self.direction_predictor = nn.Linear(config.hidden_size, 4)
+        self.direction_predictor = nn.Linear(config.hidden_size, 4)
         self.distance_predictor = nn.Linear(config.hidden_size, 1)
+            
         self.post_init()
 
     def forward(self, input_ids, obj_input_ids, img_feat, act_seq, act_dist, \
@@ -243,7 +244,7 @@ class VLN_Navigator(BertPreTrainedModel):
         encoder_outputs = self.encoder(input_feats, attention_mask=extended_attention_mask)
         pooled_output = self.pooler(encoder_outputs[0])
         pooled_output = self.dropout(pooled_output)
-        # direction = self.direction_predictor(pooled_output)
+        direction = self.direction_predictor(pooled_output)
         distance = self.distance_predictor(pooled_output)
-        return 0, distance
-        # return direction, distance
+        # return direction, 0
+        return direction, distance

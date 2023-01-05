@@ -1,1 +1,2 @@
 from .action_trainer import ActionTrainer
+from .subpolicy_trainer import SubpolicyTrainer

@@ -203,3 +203,83 @@ class Action_Collator:
         }
 
         return input_dict
+
+class Subpolicy_Collator:
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+        self.padding = True
+        self.return_tensors = "pt"
+
+    def __call__(self, batch):
+
+        obj_input_ids = None
+        # input_id, obj_input_ids, all_img_feats, view_idx_lists, decoder_input_ids, labels = [], [], [], [], [], []
+        input_id, all_img_feats, view_idx_lists, decoder_input_ids, labels, obj_input_ids = [], [], [], [], [], []
+        
+
+        for data in batch:
+            input_id.append(data[0])
+            all_img_feats.append(data[1])
+            view_idx_lists.append(data[2])
+            decoder_input_ids.append(data[3])
+            labels.append(data[4])
+            obj_input_ids.append(data[5])
+
+        input_ids = self.tokenizer.pad(
+            input_id,
+            padding=self.padding,
+            return_tensors=self.return_tensors,
+        )
+
+        if obj_input_ids != []:
+            obj_input_ids = self.tokenizer.pad(
+                obj_input_ids,
+                padding=self.padding,
+                return_tensors=self.return_tensors,
+            )['input_ids']
+
+        view_idx_lists = self.tokenizer.pad(
+            {"input_ids": view_idx_lists},
+            padding=self.padding,
+            return_tensors=self.return_tensors,
+        )
+
+        decoder_input_ids = self.tokenizer.pad(
+            decoder_input_ids,
+            padding=self.padding,
+            return_tensors=self.return_tensors,
+        )
+
+        labels = self.tokenizer.pad(
+            labels,
+            padding=self.padding,
+            return_tensors=self.return_tensors,
+        )
+
+        # decoder_input_ids = self.tokenizer.pad(
+        #     {"input_ids": decoder_input_ids},
+        #     padding=self.padding,
+        #     return_tensors=self.return_tensors,
+        # )
+
+        # labels = self.tokenizer.pad(
+        #     {"input_ids": labels},
+        #     padding=self.padding,
+        #     return_tensors=self.return_tensors,
+        # )
+
+        img_feat = torch.tensor(np.array(all_img_feats)).float()
+        all_attn_mask = torch.cat((input_ids['attention_mask'], view_idx_lists['attention_mask']), dim=1)
+
+        input_dict = {
+            'input_ids': input_ids['input_ids'],
+            'obj_input_ids': obj_input_ids,
+            'img_feat': img_feat,
+            'view_idx': view_idx_lists['input_ids'],
+            'attention_mask': all_attn_mask,
+            'decoder_input_ids': decoder_input_ids['input_ids'],
+            'decoder_attention_mask': decoder_input_ids['attention_mask'],
+            'labels': labels['input_ids'],
+        }
+
+        return input_dict
