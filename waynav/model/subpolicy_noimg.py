@@ -16,58 +16,6 @@ import math
 from typing import List, Optional, Tuple, Union, Dict
 import random
 
-class Img_Feature_Embedding(nn.Module):
-    def __init__(self, output_size):
-        super().__init__()
-        self.convs = nn.Sequential(
-            nn.Conv2d(2048, 512, kernel_size=1,stride=1, padding=0),
-            nn.BatchNorm2d(512), 
-            nn.ReLU(inplace=True),
-            nn.Conv2d(512, 128, kernel_size=1,stride=1, padding=0),
-            nn.BatchNorm2d(128), 
-            nn.ReLU(inplace=True),
-        )
-        self.fc = nn.Linear(128*100, output_size)
-    def forward(self, visual_input):
-        # B, Seq_len, Hidden, 10, 10
-        shape = visual_input.size()
-        visual_input = visual_input.view(-1, shape[2], shape[3], shape[4])
-        # B*Seq_len, 128, 10, 10
-        visual_feat = self.convs(visual_input)
-        visual_feat = visual_feat.view(visual_feat.size(0), -1)
-        visual_feat = self.fc(visual_feat)
-        visual_feat = visual_feat.view(shape[0], shape[1], -1)
-
-        return visual_feat
-
-class Img_Attention(nn.Module):
-    def __init__(self, output_size):
-        super().__init__()
-        # self.convs = nn.Sequential(
-        #     nn.Conv2d(2048, output_size, kernel_size=1,stride=1, padding=0),
-        #     nn.BatchNorm2d(output_size), 
-        #     nn.ReLU(inplace=True),
-        # )
-        vit_config = AutoConfig.from_pretrained('google/vit-base-patch16-224')
-        vit_config.update({'num_hidden_layers': 2})
-        vit_config.update({'num_attention_heads': 4})
-        vit_config.update({'num_channels': 2048})
-        vit_config.update({'patch_size': 1})
-        vit_config.update({'image_size': 10})
-        self.vit = ViTModel(vit_config, add_pooling_layer=False)
-    def forward(self, visual_input):
-        # B, Seq_len, Hidden, 10, 10
-        shape = visual_input.size()
-        visual_input = visual_input.view(-1, shape[2], shape[3], shape[4])
-        # B*Seq_len, 128, 10, 10
-        # visual_feat = self.convs(visual_input)
-        visual_feat = self.vit(pixel_values=visual_input).last_hidden_state
-        visual_feat = visual_feat[:,0,:]
-        visual_feat = visual_feat.view(shape[0], shape[1], -1)
-        # print(visual_feat.size())
-        return visual_feat
-
-
 class BartVLNEncoder(BartPretrainedModel):
     """
     Transformer encoder consisting of *config.encoder_layers* self attention layers. Each layer is a
@@ -94,7 +42,8 @@ class BartVLNEncoder(BartPretrainedModel):
 
         self.embed_positions = BartLearnedPositionalEmbedding(config.max_position_embeddings,embed_dim)
         self.layers = nn.ModuleList([BartEncoderLayer(config) for _ in range(config.encoder_layers)])
-        self.image_embeddings = Img_Feature_Embedding(config.d_model)
+        self.bbox_embeddings = nn.Linear(4, config.d_model)
+        self.depth_embeddings = nn.Linear(1, config.d_model)
         self.view_idx_embeddings = nn.Embedding(5, config.d_model)
 
         self.LayerNorm = nn.LayerNorm(config.d_model)
@@ -114,7 +63,8 @@ class BartVLNEncoder(BartPretrainedModel):
         self,
         input_ids: torch.LongTensor = None,
         obj_input_ids = None,
-        img_feat = None,
+        obj_bbox_lists = None,
+        obj_depth_lists = None,
         view_idx = None,
         attention_mask: Optional[torch.Tensor] = None,
         head_mask: Optional[torch.Tensor] = None,
@@ -166,17 +116,13 @@ class BartVLNEncoder(BartPretrainedModel):
         embeddings = inputs_embeds + embed_pos
         instruction_embeddings = self.LayerNorm(embeddings)
         instruction_embeddings = self.dropout(instruction_embeddings)
-
-        img_feat_embeddings = self.image_embeddings(img_feat)
-        # img_feat_embeddings = img_feat
-        if obj_input_ids is not None:
-            obj_word_embeddings = self.embed_tokens(obj_input_ids)
-            visual_embeddings = torch.cat([img_feat_embeddings, obj_word_embeddings], dim=1)
-        else:
-            visual_embeddings = img_feat_embeddings
+        # print(obj_input_ids.size(), obj_bbox_lists.size(), obj_depth_lists.size())
+        obj_word_embeddings = self.embed_tokens(obj_input_ids)
+        bbox_embeddings = self.bbox_embeddings(obj_bbox_lists)
+        depth_embeddings = self.depth_embeddings(obj_depth_lists.unsqueeze(-1))
 
         view_idx_embeddings = self.view_idx_embeddings(view_idx)
-        visual_embeddings = visual_embeddings + view_idx_embeddings
+        visual_embeddings = obj_word_embeddings + view_idx_embeddings + bbox_embeddings + depth_embeddings
         visual_embeddings = self.LayerNorm(visual_embeddings)
         visual_embeddings = self.dropout(visual_embeddings)
 
@@ -539,7 +485,8 @@ class BARTSubPolicyModel(BartPretrainedModel):
         self,
         input_ids: torch.LongTensor = None,
         obj_input_ids = None,
-        img_feat = None,
+        obj_bbox_lists = None,
+        obj_depth_lists = None,
         view_idx = None,
         attention_mask: Optional[torch.Tensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
@@ -582,7 +529,8 @@ class BARTSubPolicyModel(BartPretrainedModel):
             encoder_outputs = self.encoder(
                 input_ids=input_ids,
                 obj_input_ids=obj_input_ids,
-                img_feat=img_feat,
+                obj_bbox_lists=obj_bbox_lists,
+                obj_depth_lists=obj_depth_lists,
                 view_idx=view_idx,
                 attention_mask=attention_mask,
                 head_mask=head_mask,
@@ -629,7 +577,7 @@ class BARTSubPolicyModel(BartPretrainedModel):
             encoder_attentions=encoder_outputs.attentions,
         )
 
-class BartForSubpolicyGeneration(BartPretrainedModel):
+class BartNoImgForSubpolicyGeneration(BartPretrainedModel):
     base_model_prefix = "model"
     _keys_to_ignore_on_load_missing = [
         r"final_logits_bias",
@@ -641,7 +589,7 @@ class BartForSubpolicyGeneration(BartPretrainedModel):
     def __init__(self, config):
         super().__init__(config)
         # 12 or 7
-        self.subpolicy_class_num = 11
+        self.subpolicy_class_num = 12
         self.model = BARTSubPolicyModel(config, self.subpolicy_class_num)
         # self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
         # self.register_buffer("final_logits_bias", torch.zeros((1, 12)))
@@ -684,7 +632,8 @@ class BartForSubpolicyGeneration(BartPretrainedModel):
         self,
         input_ids: torch.LongTensor = None,
         obj_input_ids = None,
-        img_feat = None,
+        obj_bbox_lists=None,
+        obj_depth_lists=None,
         view_idx = None,
         attention_mask: Optional[torch.Tensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
@@ -724,7 +673,8 @@ class BartForSubpolicyGeneration(BartPretrainedModel):
         outputs = self.model(
             input_ids,
             obj_input_ids=obj_input_ids,
-            img_feat=img_feat,
+            obj_bbox_lists=obj_bbox_lists,
+            obj_depth_lists=obj_depth_lists,
             view_idx=view_idx,
             attention_mask=attention_mask,
             decoder_input_ids=decoder_input_ids,
@@ -1209,69 +1159,3 @@ class BartForSubpolicyGeneration(BartPretrainedModel):
         else:
             return sequence_outputs["sequences"]
 
-class BartForSubpolicyPretrain(BartPretrainedModel):
-    _keys_to_ignore_on_load_missing = ["encoder.embed_tokens.weight"]
-    def __init__(self, config):
-        super().__init__(config)
-        self.config = config
-        padding_idx, vocab_size = config.pad_token_id, config.vocab_size
-        self.shared = nn.Embedding(vocab_size, config.d_model, padding_idx)
-        self.encoder = BartVLNEncoder(config, self.shared)
-        self.pooler = BertPooler(config)
-        self.dropout = nn.Dropout(config.dropout)
-        # self.direction_head = nn.Linear(config.d_model, 4)
-        self.subpolicy_head = nn.Linear(config.d_model, 12)
-        self.post_init()
-
-    def get_input_embeddings(self):
-        return self.shared
-
-    def set_input_embeddings(self, value):
-        self.shared = value
-        self.encoder.embed_tokens = self.shared
-
-    def get_encoder(self):
-        return self.encoder
-
-    def forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        obj_input_ids = None,
-        img_feat = None,
-        view_idx = None,
-        trg_subpolicy = None,
-        trg_direction = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, Seq2SeqModelOutput]:
-
-        # different to other models, Bart automatically creates decoder_input_ids from
-        # input_ids if no decoder_input_ids are provided
-
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        encoder_outputs = self.encoder(
-            input_ids=input_ids,
-            obj_input_ids=obj_input_ids,
-            img_feat=img_feat,
-            view_idx=view_idx,
-            attention_mask=attention_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-        pooled_output = self.pooler(encoder_outputs[0])
-        pooled_output = self.dropout(pooled_output)
-        # direction = self.direction_head(pooled_output)
-        subpolicy = self.subpolicy_head(pooled_output)
-        # return 0, direction
-        return subpolicy, 0
-        # return subpolicy, direction

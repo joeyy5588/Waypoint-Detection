@@ -248,3 +248,203 @@ class VLN_Navigator(BertPreTrainedModel):
         distance = self.distance_predictor(pooled_output)
         # return direction, 0
         return direction, distance
+
+
+class VLNEmbeddings(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
+        self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
+        self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
+
+
+        self.image_embeddings = Img_Feature_Embedding(config.hidden_size)
+        self.view_idx_embeddings = nn.Embedding(5, config.hidden_size)
+        self.view_step_embeddings = nn.Embedding(3, config.hidden_size)
+
+        self.distance_embeddings = nn.Embedding(41, config.hidden_size)
+        self.action_step_embeddings = nn.Embedding(15, config.hidden_size)
+
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        # position_ids (1, len position emb) is contiguous in memory and exported when serialized
+        self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
+        self.register_buffer("position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)))
+        self.register_buffer(
+            "token_type_ids", torch.zeros(self.position_ids.size(), dtype=torch.long), persistent=False
+        )
+
+    def forward(self, input_ids, obj_input_ids, img_feat, act_seq, act_dist, act_step, view_idx, view_step):
+        
+        input_shape = input_ids.size()
+        seq_length = input_shape[1]
+
+        position_ids = self.position_ids[:, 0 : seq_length]
+
+        if hasattr(self, "token_type_ids"):
+            buffered_token_type_ids = self.token_type_ids[:, :seq_length]
+            buffered_token_type_ids_expanded = buffered_token_type_ids.expand(input_shape[0], seq_length)
+            token_type_ids = buffered_token_type_ids_expanded
+        else:
+            token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
+
+        inputs_embeds = self.word_embeddings(input_ids)
+        token_type_embeddings = self.token_type_embeddings(token_type_ids)
+
+        embeddings = inputs_embeds + token_type_embeddings
+        if self.position_embedding_type == "absolute":
+            position_embeddings = self.position_embeddings(position_ids)
+            embeddings += position_embeddings
+        instruction_embeddings = self.LayerNorm(embeddings)
+        instruction_embeddings = self.dropout(instruction_embeddings)
+
+        obj_word_embeddings = self.word_embeddings(obj_input_ids)
+        img_feat_embeddings = self.image_embeddings(img_feat)
+        view_step_embeddings = self.view_step_embeddings(view_step)
+        view_idx_embeddings = self.view_idx_embeddings(view_idx)
+        visual_embeddings = torch.cat([img_feat_embeddings, obj_word_embeddings], dim=1)
+        visual_embeddings = visual_embeddings + view_step_embeddings + view_idx_embeddings
+        visual_embeddings = self.LayerNorm(visual_embeddings)
+        visual_embeddings = self.dropout(visual_embeddings)
+
+        act_embed = self.word_embeddings(act_seq)
+        dist_embed = self.distance_embeddings(act_dist)
+        step_embed = self.action_step_embeddings(act_step)
+        action_embeddings = act_embed + dist_embed + step_embed
+        action_embeddings = self.LayerNorm(action_embeddings)
+        action_embeddings = self.dropout(action_embeddings)
+
+        # print(instruction_embeddings.size(), visual_embeddings.size(), action_embeddings.size())
+
+        input_feats = torch.cat([instruction_embeddings, visual_embeddings, action_embeddings], dim=1)
+        # input_feats = torch.cat([instruction_embeddings, visual_embeddings], dim=1)
+
+        return input_feats
+
+class VLN_Navigator(BertPreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        self.embeddings = VLNEmbeddings(config)
+        self.encoder = BertEncoder(config)
+        self.pooler = BertPooler(config)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        # self.classifier = nn.Linear(config.hidden_size*4, 9)
+        self.direction_predictor = nn.Linear(config.hidden_size, 4)
+        self.distance_predictor = nn.Linear(config.hidden_size, 1)
+            
+        self.post_init()
+
+    def forward(self, input_ids, obj_input_ids, img_feat, act_seq, act_dist, \
+                act_step, view_idx, view_step, attention_mask):
+
+        input_feats = self.embeddings(input_ids, obj_input_ids, img_feat, act_seq, act_dist, act_step, view_idx, view_step)
+
+        if attention_mask.dim() == 2:
+            extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+        elif attention_mask.dim() == 3:
+            extended_attention_mask = attention_mask.unsqueeze(1)
+        else:
+            raise NotImplementedError
+
+        extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+
+        encoder_outputs = self.encoder(input_feats, attention_mask=extended_attention_mask)
+        pooled_output = self.pooler(encoder_outputs[0])
+        pooled_output = self.dropout(pooled_output)
+        direction = self.direction_predictor(pooled_output)
+        distance = self.distance_predictor(pooled_output)
+        # return direction, 0
+        return direction, distance
+
+class VLNEmbeddings2(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
+        self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
+        self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
+
+
+        self.image_embeddings = Img_Feature_Embedding(config.hidden_size)
+        self.view_idx_embeddings = nn.Embedding(5, config.hidden_size)
+
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        # position_ids (1, len position emb) is contiguous in memory and exported when serialized
+        self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
+        self.register_buffer("position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)))
+        self.register_buffer(
+            "token_type_ids", torch.zeros(self.position_ids.size(), dtype=torch.long), persistent=False
+        )
+
+    def forward(self, input_ids, obj_input_ids, img_feat, view_idx):
+        
+        input_shape = input_ids.size()
+        seq_length = input_shape[1]
+
+        position_ids = self.position_ids[:, 0 : seq_length]
+
+        if hasattr(self, "token_type_ids"):
+            buffered_token_type_ids = self.token_type_ids[:, :seq_length]
+            buffered_token_type_ids_expanded = buffered_token_type_ids.expand(input_shape[0], seq_length)
+            token_type_ids = buffered_token_type_ids_expanded
+        else:
+            token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
+
+        inputs_embeds = self.word_embeddings(input_ids)
+        token_type_embeddings = self.token_type_embeddings(token_type_ids)
+
+        embeddings = inputs_embeds + token_type_embeddings
+        if self.position_embedding_type == "absolute":
+            position_embeddings = self.position_embeddings(position_ids)
+            embeddings += position_embeddings
+        instruction_embeddings = self.LayerNorm(embeddings)
+        instruction_embeddings = self.dropout(instruction_embeddings)
+
+        obj_word_embeddings = self.word_embeddings(obj_input_ids)
+        img_feat_embeddings = self.image_embeddings(img_feat)
+        view_idx_embeddings = self.view_idx_embeddings(view_idx)
+        visual_embeddings = torch.cat([img_feat_embeddings, obj_word_embeddings], dim=1)
+        visual_embeddings = visual_embeddings + view_idx_embeddings
+        visual_embeddings = self.LayerNorm(visual_embeddings)
+        visual_embeddings = self.dropout(visual_embeddings)
+
+
+        input_feats = torch.cat([instruction_embeddings, visual_embeddings], dim=1)
+        # input_feats = torch.cat([instruction_embeddings, visual_embeddings], dim=1)
+
+        return input_feats
+
+class VLN_MetaAction(BertPreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        self.embeddings = VLNEmbeddings2(config)
+        self.encoder = BertEncoder(config)
+        self.pooler = BertPooler(config)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        # self.direction_predictor = nn.Linear(config.hidden_size, 4)
+        self.subpolicy_predictor = nn.Linear(config.hidden_size, 12)
+            
+        self.post_init()
+
+    def forward(self, input_ids, obj_input_ids, img_feat, view_idx, attention_mask, trg_subpolicy=None, trg_direction=None):
+
+        input_feats = self.embeddings(input_ids, obj_input_ids, img_feat, view_idx)
+
+        if attention_mask.dim() == 2:
+            extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+        elif attention_mask.dim() == 3:
+            extended_attention_mask = attention_mask.unsqueeze(1)
+        else:
+            raise NotImplementedError
+
+        extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+
+        encoder_outputs = self.encoder(input_feats, attention_mask=extended_attention_mask)
+        pooled_output = self.pooler(encoder_outputs[0])
+        pooled_output = self.dropout(pooled_output)
+        # direction = self.direction_predictor(pooled_output)
+        subpolicy = self.subpolicy_predictor(pooled_output)
+        # return 0, direction
+        return subpolicy, 0
