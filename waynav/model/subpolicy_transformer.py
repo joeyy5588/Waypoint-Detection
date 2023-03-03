@@ -641,7 +641,7 @@ class BartForSubpolicyGeneration(BartPretrainedModel):
     def __init__(self, config):
         super().__init__(config)
         # 12 or 7
-        self.subpolicy_class_num = 11
+        self.subpolicy_class_num = 12
         self.model = BARTSubPolicyModel(config, self.subpolicy_class_num)
         # self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
         # self.register_buffer("final_logits_bias", torch.zeros((1, 12)))

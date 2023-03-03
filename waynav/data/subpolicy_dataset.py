@@ -28,7 +28,7 @@ class Subpolicy_Dataset:
         self.start_class_name_list = []
 
         print("Loading Dataset")
-        subpolicy_dict = json.load(open(os.path.join(root_dir, 'subpolicy_new.json')))
+        subpolicy_dict = json.load(open(os.path.join(root_dir, 'subpolicy_sidestep.json')))
         for n in tqdm(os.listdir(root_dir)):
             if os.path.isdir(os.path.join(root_dir, n)):
                 for trial in os.listdir(os.path.join(root_dir, n)):
@@ -73,27 +73,27 @@ class Subpolicy_Dataset:
         self.class_name_dict = json.load(open(os.path.join(root_dir, 'class_name.json')))
         self.location_dict = json.load(open(os.path.join(root_dir, 'location.json')))
         self.objarg_dict = json.load(open(os.path.join(root_dir, 'objarg.json')))
-        # self.subpolicy_to_int = {
-        #     'move forward': 3,
-        #     'turn left': 4,
-        #     'turn right': 5,
-        #     'turn around': 6,
-        #     'front left': 7,
-        #     'front right': 8,
-        #     'step back': 9,
-        #     'face left': 10,
-        #     'face right': 11,
-        # }
         self.subpolicy_to_int = {
             'move forward': 3,
             'turn left': 4,
             'turn right': 5,
             'turn around': 6,
-            'side step': 7,
-            'step back': 8,
-            'face left': 9,
-            'face right': 10,
+            'step left': 7,
+            'step right': 8,
+            'step back': 9,
+            'face left': 10,
+            'face right': 11,
         }
+        # self.subpolicy_to_int = {
+        #     'move forward': 3,
+        #     'turn left': 4,
+        #     'turn right': 5,
+        #     'turn around': 6,
+        #     'side step': 7,
+        #     'step back': 8,
+        #     'face left': 9,
+        #     'face right': 10,
+        # }
         # self.subpolicy_dict = json.load(open(os.path.join(root_dir, 'subpolicy.json')))
         self.original_len = len(self.img_fn_list)
 
@@ -121,10 +121,21 @@ class Subpolicy_Dataset:
         instruction = traj_data['instructions'][inst_idx][nav_point]
         location_inst = traj_data['instructions'][0][nav_point]
 
-        location = self.location_dict[location_inst].lower()
+        try:
+            location = self.location_dict[location_inst].lower()
+        except:
+            print('location', img_path, instruction, location_inst)
+            location=''
+
         location = "Target: " + location.strip()
         interaction_instruction = traj_data['instructions'][0][interaction_point]
-        objarg = self.objarg_dict[interaction_instruction].strip()
+
+        try:
+            objarg = self.objarg_dict[interaction_instruction].strip()
+        except:
+            print('objarg', img_path, instruction, interaction_instruction)
+            objarg=''
+            
         objarg = objarg.replace("Target", "Object")
 
         # replace_instruction = instruction.lower()

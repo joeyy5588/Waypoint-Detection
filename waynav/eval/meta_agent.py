@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from waynav.gen.utils.py_util import walklevel
 from waynav.env.thor_env import ThorEnv
-from waynav.data.dataset import Panorama_Dataset
 from transformers import AutoTokenizer, AutoConfig
 from .detection_utils import Detection_Helper
 from waynav.model import VLN_Navigator, ROI_Waypoint_Predictor
@@ -19,23 +18,16 @@ class Eval_Agent(object):
         data_path = args.data_path
         save_path = args.save_path
         split = data_path.split('/')[-1]
-        # Path for self-extracted waypoint data
-        waypoint_path = '/data/joey/panorama_' + split
         self.args = args
+        self.use_gt_nav = True
+        self.use_gt_mask = True
+        self.use_gt_subpolicy = True
         self.traj_list = []
-        self.waypoint_list = []
         # self.model = model
         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
         self.object_model = Detection_Helper(args, args.object_model_path)
         self.recep_model = Detection_Helper(args, args.recep_model_path, object_types='receptacles')
-
-        config = AutoConfig.from_pretrained('bert-base-uncased')
-        self.distance_model = ROI_Waypoint_Predictor(config).from_pretrained(args.distance_model_path)
-
-        config.update({'num_hidden_layers': 12})
-        config.update({'type_vocab_size': 5})
-        self.direction_model = VLN_Navigator(config).from_pretrained(args.direction_model_path)
 
         # cache
         cache_file = os.path.join(args.save_path, "cache.json")
@@ -50,15 +42,6 @@ class Eval_Agent(object):
         for dir_name, subdir_list, file_list in walklevel(data_path, level=2):
             if "trial_" in dir_name:
                 json_file = os.path.join(dir_name, 'traj_data.json')
-                if not os.path.isfile(json_file) or json_file in self.finished_list:
-                    continue
-                
-                waypoint_dir = os.path.join(waypoint_path, json_file.split('trial')[0].split('-')[-1], dir_name.split('/')[-1])
-                waypoint_file = os.path.join(waypoint_dir, 'traj.json')
-                if not os.path.isfile(waypoint_file):
-                    continue
-
-                self.waypoint_list.append(waypoint_file)
                 self.traj_list.append(json_file)
 
 
@@ -66,7 +49,6 @@ class Eval_Agent(object):
         env = ThorEnv(player_screen_width=300, player_screen_height=300)
         traj_list = self.traj_list
         finished_list = self.finished_list
-        waypoint_list = self.waypoint_list
 
         trial_num = 0
         trial_success = 0
@@ -74,17 +56,14 @@ class Eval_Agent(object):
         goal_success = 0
         while len(traj_list) > 0:
             json_file = traj_list.pop()
-            waypoint_file = waypoint_list.pop()
 
             print ("(%d Left) Evaluating: %s" % (len(traj_list), json_file))
             try:
-                predict_waypoint, complete_goals, total_goals = self.predict_waypoint(env, json_file, waypoint_file)
-                # self.plot_waypoint(waypoint_file, predict_waypoint)
+                success, gc, gn = self.execute_navigation(self, env, json_file)
                 trial_num += 1
-                if complete_goals == total_goals:
-                    trial_success += 1
-                goal_num += total_goals
-                goal_success += complete_goals
+                trial_success += success
+                goal_num += gc
+                goal_success += gn
 
                 print("Complete %d/%d tasks, and %d/%d goals."%(trial_success, trial_num, goal_success, goal_num))
                 finished_list.append(json_file)
@@ -122,6 +101,45 @@ class Eval_Agent(object):
         plt.close()
         img = cv2.cvtColor(img,cv2.COLOR_RGB2BGR)
         cv2.imwrite('Traj.png', img)
+
+    def execute_navigation(self, env, traj_data):
+        traj_data = json.load(open(json_file))
+        # scene setup
+        scene_num = traj_data['scene']['scene_num']
+        object_poses = traj_data['scene']['object_poses']
+        object_toggles = traj_data['scene']['object_toggles']
+        dirty_and_empty = traj_data['scene']['dirty_and_empty']
+        # reset
+        scene_name = 'FloorPlan%d' % scene_num
+        env.reset(scene_name)
+        env.restore_scene(object_poses, object_toggles, dirty_and_empty)
+        event = env.step(dict(traj_data['scene']['init_action']))
+
+        env.set_task(traj_data, self.args, reward_type='dense')
+
+        if self.use_gt_nav:
+            for ll_idx, ll_action in enumerate(traj_data['plan']['low_actions']):
+                cmd = ll_action['api_action']
+                cmd = {k: cmd[k] for k in ['action', 'objectId', 'receptacleObjectId', 'placeStationary', 'forceAction'] if k in cmd}
+                event = env.step(cmd)
+                if not event.metadata['lastActionSuccess']:
+                    raise Exception("Replay Failed: %s" % (env.last_event.metadata['errorMessage']))
+
+        if env.get_goal_satisfied():
+            print("Goal Reached")
+            success = 1
+        else:
+            print("Goal Not Reached")
+            success = 0
+
+        goal_success, goal_num = env.get_goal_conditions_met()
+
+        return success, goal_success, goal_num
+
+
+
+    def execute_interaction(self, env):
+        pass
 
     def predict_waypoint(self, env, json_file, waypoint_file):
         device='cuda:0'

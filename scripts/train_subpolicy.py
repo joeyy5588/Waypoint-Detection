@@ -7,13 +7,14 @@ from waynav.eval import compute_meta_action_metrics
 from transformers import Seq2SeqTrainingArguments, AutoConfig
 from torch.profiler import profile, record_function, ProfilerActivity
 import numpy as np
+from tqdm import tqdm
 
 train_data_dir = '/local1/cfyang/substep_train'
 eval_data_dir = '/local1/cfyang/substep_valid_seen'
 unseen_eval_data_dir = '/local1/cfyang/substep_valid_unseen'
 train_dataset = Subpolicy_Dataset(train_data_dir)
 eval_dataset = Subpolicy_Dataset(eval_data_dir)
-# for i in range(len(eval_dataset)):
+# for i in tqdm(range(len(train_dataset))):
 #     train_dataset.__getitem__(i)
 unseen_eval_dataset = Subpolicy_Dataset(unseen_eval_data_dir)
 eval_dataset_dict = {
@@ -36,7 +37,7 @@ pretrain_weight = 'facebook/bart-base'
 model = BartForSubpolicyGeneration.from_pretrained(pretrain_weight, config=config)
 # output_path = "/local1/cfyang/output/subpolicy/label_9_decoder_4_remove_perturb"
 # output_path = "/local1/cfyang/output/subpolicy/label_9_decoder_4_perturb_inst"
-output_path = "/local1/cfyang/output/subpolicy/new_subpolicy_3x_inst"
+output_path = "/local1/cfyang/output/subpolicy/sidestep_subpolicy_3x_inst"
 # output_path = "/local1/cfyang/output/subpolicy/inference"
 batch_size = 128
 learning_rate = 1e-4

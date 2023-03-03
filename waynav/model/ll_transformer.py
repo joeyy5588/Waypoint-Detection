@@ -39,7 +39,7 @@ class VLNEmbeddings(nn.Module):
         self.image_embeddings = Img_Feature_Embedding(config.hidden_size)
         self.view_idx_embeddings = nn.Embedding(5, config.hidden_size)
         self.view_step_embeddings = nn.Embedding(3, config.hidden_size)
-        self.subpolicy_embeddings = nn.Embedding(8, config.hidden_size)
+        self.subpolicy_embeddings = nn.Embedding(9, config.hidden_size)
 
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)

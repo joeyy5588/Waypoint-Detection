@@ -46,7 +46,6 @@ def compute_meta_action_metrics(eval_preds):
     eval_dict["BF_match"] = bf_match/data_num
     eval_dict["RE_acc_SR"] = eval_dict["RE_match"] + eval_dict["Equal_All"]
     eval_dict["BF_acc_SR"] = eval_dict["RE_match"] + eval_dict["BF_match"] + eval_dict["Equal_All"]
-    print("finish evaluation")
     # np.savez("/local1/cfyang/output/subpolicy/inference/unseen_predict_1500.npz", preds=preds, labels=labels)
     # print(eval_dict)
     return eval_dict
@@ -57,27 +56,27 @@ def compute_meta_action_scores(preds, labels):
     else:
         split = 'unseen'
     fn = json.load(open('/local1/cfyang/output/subpolicy/inference/'+split+'_fn.json'))
-    # subpolicy_to_int = {
-    #     'move forward': 3,
-    #     'turn left': 4,
-    #     'turn right': 5,
-    #     'turn around': 6,
-    #     'front left': 7,
-    #     'front right': 8,
-    #     'step back': 9,
-    #     'face left': 10,
-    #     'face right': 11,
-    # }
     subpolicy_to_int = {
         'move forward': 3,
         'turn left': 4,
         'turn right': 5,
         'turn around': 6,
-        'side step': 7,
-        'step back': 8,
-        'face left': 9,
-        'face right': 10,
+        'step left': 7,
+        'step right': 8,
+        'step back': 9,
+        'face left': 10,
+        'face right': 11,
     }
+    # subpolicy_to_int = {
+    #     'move forward': 3,
+    #     'turn left': 4,
+    #     'turn right': 5,
+    #     'turn around': 6,
+    #     'side step': 7,
+    #     'step back': 8,
+    #     'face left': 9,
+    #     'face right': 10,
+    # }
     subpolicy_to_re = {
         '': '',
         'move forward': "m{1,}",
@@ -85,8 +84,8 @@ def compute_meta_action_scores(preds, labels):
         'turn right': "r{1}",
         'turn around': "(lm?l)|(rm?r)",
         'side step': "(m*lm{,2}rm*)|(m*rm{,2}lm*)",
-        'front left': "(m*lm{,2}rm*)",
-        'front right': "(m*rm{,2}lm*)",
+        'step left': "(lm{,3}r)",
+        'step right': "(rm{,3}l)",
         'step back': "(ll|rr)m+(ll|rr)",
         'face left': "(lm{0,2}$)|(l$)",
         'face right': "(rm{0,2}$)|(r$)",
