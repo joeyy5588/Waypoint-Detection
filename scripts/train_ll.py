@@ -27,7 +27,7 @@ config = AutoConfig.from_pretrained('bert-base-uncased')
 pretrain_weight = 'bert-base-uncased'
 # pretrain_weight = "/local1/cfyang/output/subpolicy/ll_action/checkpoint-1000"
 model = VLN_LL_Action.from_pretrained(pretrain_weight, config=config)
-output_path = "/local1/cfyang/output/subpolicy/ll_new_sub_no_init"
+output_path = "/local1/cfyang/output/subpolicy/ll_new_sub_init"
 batch_size = 128
 learning_rate = 1e-4
 save_steps = 500

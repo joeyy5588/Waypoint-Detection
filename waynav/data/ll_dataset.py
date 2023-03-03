@@ -232,17 +232,17 @@ class Low_Level_Dataset:
             view_step_lists.append(1)
             view_step_lists.append(1)
         
-        # for i in range(4):
-        #     res_feat = np.load(start_resnet_feat[i].replace('.png', '.npz.npy'))
-        #     all_img_feats.append(res_feat)
+        for i in range(4):
+            res_feat = np.load(start_resnet_feat[i].replace('.png', '.npz.npy'))
+            all_img_feats.append(res_feat)
 
-        #     res_feat = np.load(start_resnet_feat[i+4].replace('.png', '.npz.npy'))
-        #     all_img_feats.append(res_feat)
+            res_feat = np.load(start_resnet_feat[i+4].replace('.png', '.npz.npy'))
+            all_img_feats.append(res_feat)
 
-        #     view_idx_lists.append(i+1)
-        #     view_idx_lists.append(i+1)
-        #     view_step_lists.append(2)
-        #     view_step_lists.append(2)
+            view_idx_lists.append(i+1)
+            view_idx_lists.append(i+1)
+            view_step_lists.append(2)
+            view_step_lists.append(2)
 
         all_img_feats = np.array(all_img_feats)
 
@@ -272,24 +272,24 @@ class Low_Level_Dataset:
                 view_step_lists += [1] * (len(obj_input_id["input_ids"])-1)
                 view_idx_lists += [i+1] * (len(obj_input_id["input_ids"])-1)
 
-        # for i in range(4):
-        #     # if i == trg_direction:
-        #     old_combined_obj_list = start_class_name_dict[i]
-        #     combined_obj_list = []
-        #     for cobj in old_combined_obj_list:
-        #         if cobj.lower() in instruction:
-        #             combined_obj_list.append(cobj)
-        #         elif 'table' in cobj.lower():
-        #             combined_obj_list.append(cobj)
-        #     # combined_obj_list = '</s>'
-        #     obj_input_id = self.tokenizer(' '.join(combined_obj_list))
-        #     for k, v in obj_input_id.items():
-        #         # Remove the CLS token
-        #         list_to_add = obj_input_id[k][1:]
-        #         obj_input_ids[k] += list_to_add
+        for i in range(4):
+            # if i == trg_direction:
+            old_combined_obj_list = start_class_name_dict[i]
+            combined_obj_list = []
+            for cobj in old_combined_obj_list:
+                if cobj.lower() in instruction:
+                    combined_obj_list.append(cobj)
+                elif 'table' in cobj.lower():
+                    combined_obj_list.append(cobj)
+            # combined_obj_list = '</s>'
+            obj_input_id = self.tokenizer(' '.join(combined_obj_list))
+            for k, v in obj_input_id.items():
+                # Remove the CLS token
+                list_to_add = obj_input_id[k][1:]
+                obj_input_ids[k] += list_to_add
 
-        #     view_step_lists += [2] * (len(obj_input_id["input_ids"])-1)
-        #     view_idx_lists += [i+1] * (len(obj_input_id["input_ids"])-1)
+            view_step_lists += [2] * (len(obj_input_id["input_ids"])-1)
+            view_idx_lists += [i+1] * (len(obj_input_id["input_ids"])-1)
 
         
         # view_idx_lists = torch.LongTensor(view_idx_lists)
