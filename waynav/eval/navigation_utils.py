@@ -1,5 +1,8 @@
 import numpy as np
 import torch
+from transformers import AutoTokenizer, AutoConfig
+from waynav.model import BartForSubpolicyGeneration, VLN_LL_Action
+import json, os
 
 def prepare_direction_input(tokenizer, patch_feat, obj_cls, recep_cls, instruction, actseq_list, dist_list):
 
@@ -144,3 +147,248 @@ def predict_distance(model, inputs):
     distance = max(0, min(distance, 40))
 
     return distance
+
+class Navigation_Helper:
+    def __init__(self, args, device, level):
+        # For subpolicy
+        if level == 'high':
+            config = AutoConfig.from_pretrained('facebook/bart-base')
+            config.update({'num_beams': 5})
+            self.model = BartForSubpolicyGeneration.from_pretrained(args.subpolicy_model_path, config=config)
+            self.tokenizer = AutoTokenizer.from_pretrained("facebook/bart-base")
+        # For ll action
+        elif level == 'low':
+            config = AutoConfig.from_pretrained('bert-base-uncased')
+            self.model = VLN_LL_Action.from_pretrained(args.ll_model_path, config=config)
+            self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+
+        self.level = level
+
+        split = args.data_path.split('/')[-1]
+        self.location_dict = json.load(open(os.path.join('/data/joey/alfred_metadata', split, 'location.json')))
+        self.objarg_dict = json.load(open(os.path.join('/data/joey/alfred_metadata', split, 'objarg.json')))
+        inst_dict = json.load(open('/data/joey/alfred_metadata/'+split+'/inst_dict.json'))
+        self.inst2type = inst_dict['type']
+        
+        self.model.to(device)
+        self.device = device
+        self.model.eval()
+
+        self.subpolicy_to_int = {
+            'move forward': 0,
+            'turn left': 1,
+            'turn right': 2,
+            'turn around': 3,
+            'step left': 4,
+            'step right': 5,
+            'step back': 6,
+            'face left': 7,
+            'face right': 8,
+        }
+
+        self.int_to_subpolicy = {
+            3: 'move forward',
+            4: 'turn left',
+            5: 'turn right',
+            6: 'turn around',
+            7: 'step left',
+            8: 'step right',
+            9: 'step back',
+            10: 'face left',
+            11: 'face right',
+        }
+
+        self.int_to_action = {
+            0: 'MoveAhead',
+            1: 'RotateLeft',
+            2: 'RotateRight',
+            3: 'Interaction',
+        }
+
+    def to_device(self, device):
+        self.model.to(device)
+
+    def process_instruction(self, instruction, traj_data):
+        all_instructions = traj_data['turk_annotations']['anns']
+        instruction_ridx = 0
+        instruction_high_idx = 0
+        for i in range(len(all_instructions)):
+            if instruction in all_instructions[i]['high_descs']:
+                instruction_ridx = i
+                instruction_high_idx = all_instructions[i]['high_descs'].index(instruction)
+                break
+
+        location_instruction = all_instructions[0]['high_descs'][instruction_high_idx]
+
+        for i in range(instruction_high_idx, len(all_instructions[instruction_ridx]['high_descs'])):
+            if self.inst2type[all_instructions[instruction_ridx]['high_descs'][i].lower().strip()] == 'interaction':
+                interaction_instruction = all_instructions[instruction_ridx]['high_descs'][i]
+                break
+        
+        try:
+            location = self.location_dict[location_instruction].lower()
+        except:
+            print('location', img_path, instruction, location_instruction)
+            location=''
+
+        location = "Target: " + location.strip()
+
+        try:
+            objarg = self.objarg_dict[interaction_instruction].strip()
+        except:
+            print('objarg', img_path, instruction, interaction_instruction)
+            objarg=''
+            
+        objarg = objarg.replace("Target", "Object")
+
+        if self.level == 'high':
+            return instruction.lower()+' </s>'+location+' </s>'+objarg
+        else:
+            return instruction.lower()+' and '+interaction_instruction.lower() + ' [SEP] ' + location+' [SEP] '+objarg
+
+        return instruction
+
+    def prepare_subpolicy_inputs(self, instruction, traj_data, patch_feat, obj_cls, recep_cls):
+        processed_instruction = self.process_instruction(instruction, traj_data)
+        input_ids = self.tokenizer(processed_instruction)
+        view_idx_lists = []
+        for i in range(8):
+            view_idx_lists.append(i%4 + 1)
+
+        obj_input_ids = 0
+        for i in range(4):
+            combined_obj_list = list(obj_cls[i]) + list(obj_cls[i+4]) + list(recep_cls[i])+ list(recep_cls[i+4])
+            old_combined_obj_list = list(set(combined_obj_list))
+            combined_obj_list = []
+            for cobj in old_combined_obj_list:
+                if cobj.lower() in instruction:
+                    combined_obj_list.append(cobj)
+                elif 'table' in cobj.lower():
+                    combined_obj_list.append(cobj)
+            # combined_obj_list = '</s>'
+            obj_input_id = self.tokenizer(' '.join(combined_obj_list))
+
+            if i == 0:
+                obj_input_ids = obj_input_id
+                view_idx_lists += [i+1] * len(obj_input_id["input_ids"])
+
+            else:
+                for k, v in obj_input_id.items():
+                    # Remove the CLS token
+                    list_to_add = obj_input_id[k][1:]
+                    obj_input_ids[k] += list_to_add
+
+                view_idx_lists += [i+1] * (len(obj_input_id["input_ids"])-1)
+
+        all_attn_mask = torch.ones(len(input_ids['input_ids'])+len(view_idx_lists), dtype=torch.long)
+        decoder_input_ids = [2]
+        decoder_attention_mask = [1]
+        # print(len(obj_input_ids['input_ids']), len(view_idx_lists), len(view_step_lists))
+
+        input_dict = {
+            'input_ids': torch.LongTensor(input_ids['input_ids']),
+            'obj_input_ids': torch.LongTensor(obj_input_ids['input_ids']),
+            'img_feat': patch_feat,
+            'view_idx': torch.LongTensor(view_idx_lists),
+            'attention_mask': all_attn_mask,
+            'decoder_input_ids': torch.LongTensor(decoder_input_ids),
+            'decoder_attention_mask': torch.LongTensor(decoder_attention_mask),
+        }
+
+        return input_dict
+
+    def prepare_ll_inputs(self, instruction, traj_data, patch_feat, obj_cls, recep_cls, subpolicy):
+        processed_instruction = self.process_instruction(instruction, traj_data)
+        input_ids = self.tokenizer(processed_instruction)
+        view_idx_lists = []
+        view_step_lists = []
+        for i in range(8):
+            view_idx_lists.append(i%4 + 1)
+            view_step_lists.append(1)
+
+        obj_input_ids = 0
+        for i in range(4):
+            combined_obj_list = list(obj_cls[i]) + list(obj_cls[i+4]) + list(recep_cls[i])+ list(recep_cls[i+4])
+            old_combined_obj_list = list(set(combined_obj_list))
+            combined_obj_list = []
+            for cobj in old_combined_obj_list:
+                if cobj.lower() in instruction:
+                    combined_obj_list.append(cobj)
+                elif 'table' in cobj.lower():
+                    combined_obj_list.append(cobj)
+            # combined_obj_list = '</s>'
+            obj_input_id = self.tokenizer(' '.join(combined_obj_list))
+
+            if i == 0:
+                obj_input_ids = obj_input_id
+                view_idx_lists += [i+1] * len(obj_input_id["input_ids"])
+                view_step_lists += [1] * len(obj_input_id["input_ids"])
+            else:
+                for k, v in obj_input_id.items():
+                    # Remove the CLS token
+                    list_to_add = obj_input_id[k][1:]
+                    obj_input_ids[k] += list_to_add
+
+                view_idx_lists += [i+1] * (len(obj_input_id["input_ids"])-1)
+                view_step_lists += [1] * (len(obj_input_id["input_ids"])-1)
+
+        all_attn_mask = torch.ones(len(input_ids['input_ids'])+1+len(view_idx_lists), dtype=torch.long)
+        subpolicy = self.subpolicy_to_int[subpolicy]
+        input_dict = {
+            'input_ids': torch.LongTensor(input_ids['input_ids']),
+            'obj_input_ids': torch.LongTensor(obj_input_ids['input_ids']),
+            'img_feat': patch_feat,
+            'view_idx': torch.LongTensor(view_idx_lists),
+            'view_step': torch.LongTensor(view_step_lists),
+            'attention_mask': all_attn_mask,
+            'subpolicy': torch.LongTensor([subpolicy]),
+        }
+
+        return input_dict
+
+    def predict(self, inst, traj_data, patch_feat, obj_cls, recep_cls, subpolicy=None):
+        if self.level == 'high':
+            inputs = self.prepare_subpolicy_inputs(inst, traj_data, patch_feat, obj_cls, recep_cls)
+            for k, v in inputs.items():
+                inputs[k] = v.unsqueeze(0).to(self.device)
+
+            gen_kwargs = {}
+            gen_kwargs["max_length"] = self.model.config.max_length
+            gen_kwargs["num_beams"] = 5
+            gen_kwargs["synced_gpus"] = False
+
+            if "attention_mask" in inputs:
+                gen_kwargs["attention_mask"] = inputs.get("attention_mask", None)
+
+            if hasattr(self.model, "encoder") and self.model.encoder.main_input_name != self.model.main_input_name:
+                generation_inputs = inputs[self.model.encoder.main_input_name]
+            else:
+                generation_inputs = inputs[self.model.main_input_name]
+
+            irrelevant_prefix = ["decoder_", "cross_attn", "use_cache", "input_ids"]
+            for argument, value in inputs.items():
+                if not any(argument.startswith(p) for p in irrelevant_prefix):
+                    gen_kwargs[argument] = value
+
+            with torch.no_grad():
+
+                generated_tokens = self.model.generate(
+                    generation_inputs,
+                    **gen_kwargs,
+                )
+                preds = generated_tokens.cpu().tolist()[0][1:]
+                preds = preds[:preds.index(2)]
+                preds = [self.int_to_subpolicy[p] for p in preds]
+                return preds
+        else:
+            inputs = self.prepare_ll_inputs(inst, traj_data, patch_feat, obj_cls, recep_cls, subpolicy)
+            for k, v in inputs.items():
+                inputs[k] = v.unsqueeze(0).to(self.device)
+
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                pred_action = outputs
+                pred_action = torch.argmax(pred_action, dim=-1).cpu().tolist()[0]
+                pred_action = self.int_to_action[pred_action]
+                return pred_action
+        return

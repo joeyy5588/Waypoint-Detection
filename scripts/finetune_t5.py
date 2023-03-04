@@ -644,7 +644,7 @@ def main():
         result = {k: round(v * 100, 4) for k, v in result.items()}
         prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
         result["gen_len"] = np.mean(prediction_lens)
-        json.dump(out_dict, open('/local1/cfyang/alfworld/data/json_2.1.1/valid_seen/int_obj_prediction.json', 'w'))
+        json.dump(out_dict, open('/local1/cfyang/alfworld/data/json_2.1.1/valid_unseen/remain_pred.json', 'w'))
         return result
 
     # Override the decoding parameters of Seq2SeqTrainer

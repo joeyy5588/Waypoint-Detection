@@ -1,5 +1,6 @@
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import LazyConfig, instantiate
+import detectron2.data.transforms as T
 # from detectron2.engine import default_setup
 from detectron2.engine.defaults import create_ddp_model
 from detectron2.modeling.meta_arch.rcnn import GeneralizedRCNN
@@ -31,7 +32,14 @@ class Detection_Helper:
         cfg.model.roi_heads.box_predictor.test_score_thresh = 0.2
         self.model = instantiate(cfg.model)
         self.model.eval()
+
+        self.aug = T.ResizeShortestEdge(
+            [400, 400], 1333
+        )
+
         DetectionCheckpointer(self.model).load(model_path)
+
+        # self.idx2class = {i+1: self.object_classes[i] for i in range(len(self.object_classes))}
 
     def to_device(self, device):
         self.model.to(device)
@@ -97,3 +105,19 @@ class Detection_Helper:
         for i in range(len(pred_ind)):
             extracted_features.append(box_features[pred_ind[i]])
         return pred_instances, extracted_features
+
+    def predict_mask(self, original_image):
+        with torch.no_grad():
+            original_image = original_image[:, :, ::-1]
+            height, width = original_image.shape[:2]
+            image = self.aug.get_transform(original_image).apply_image(original_image)
+            image = torch.as_tensor(image.astype("float32").transpose(2, 0, 1))
+
+            inputs = {"image": image, "height": height, "width": width}
+            outputs = self.model([inputs])[0]['instances']
+            prediction_dict = {
+                'pred_classes': self.object_classes[outputs.pred_classes.cpu().numpy()],
+                'scores': outputs.scores.cpu().numpy(),
+                'pred_masks': outputs.pred_masks.cpu().numpy()
+            }
+            return prediction_dict

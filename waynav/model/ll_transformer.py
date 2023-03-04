@@ -84,7 +84,7 @@ class VLNEmbeddings(nn.Module):
         visual_embeddings = self.dropout(visual_embeddings)
 
         subpolicy_embeddings = self.subpolicy_embeddings(subpolicy)
-        subpolicy_embeddings = subpolicy_embeddings.unsqueeze(1)
+        # subpolicy_embeddings = subpolicy_embeddings.unsqueeze(1)
 
         input_feats = torch.cat([instruction_embeddings, subpolicy_embeddings, visual_embeddings], dim=1)
         # input_feats = torch.cat([instruction_embeddings, visual_embeddings], dim=1)

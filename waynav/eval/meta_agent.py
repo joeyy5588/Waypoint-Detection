@@ -3,31 +3,48 @@ import json
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+import copy
 from waynav.gen.utils.py_util import walklevel
+from waynav.gen.constants import OBJECTS_DETECTOR, STATIC_RECEPTACLES
 from waynav.env.thor_env import ThorEnv
 from transformers import AutoTokenizer, AutoConfig
 from .detection_utils import Detection_Helper
 from waynav.model import VLN_Navigator, ROI_Waypoint_Predictor
-from .navigation_utils import prepare_direction_input, prepare_distance_input, predict_direction, predict_distance
+from .navigation_utils import Navigation_Helper
 import math
 import torch
 
-class Eval_Agent(object):
+class Eval_Subpolicy_Agent(object):
     def __init__(self, args):
         # Path for testing data
         data_path = args.data_path
         save_path = args.save_path
         split = data_path.split('/')[-1]
+        split_fn = json.load(open('/data/joey/alfred_metadata/oct21.json'))
+        inst_dict = json.load(open('/data/joey/alfred_metadata/'+split+'/inst_dict.json'))
+        if 'valid' in split:
+            self.subpolicy＿dict = json.load(open('/data/joey/alfred_metadata/'+split+'/subpolicy_sidestep.json'))
+        else:
+            self.subpolicy_dict = None
+
+        self.inst2type = inst_dict['type']
+        self.inst2action = inst_dict['action']
         self.args = args
-        self.use_gt_nav = True
-        self.use_gt_mask = True
+        self.use_gt_nav = False
+        # self.use_gt_lang = True
+        self.use_gt_mask = False
         self.use_gt_subpolicy = True
         self.traj_list = []
+        self.subpolicy_list = []
         # self.model = model
         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
         self.object_model = Detection_Helper(args, args.object_model_path)
         self.recep_model = Detection_Helper(args, args.recep_model_path, object_types='receptacles')
+
+        self.subpolicy_model = Navigation_Helper(args, 'cuda:2', 'high')
+        self.ll_model = Navigation_Helper(args, 'cuda:2', 'low')
+        self.open_mask = None
 
         # cache
         cache_file = os.path.join(args.save_path, "cache.json")
@@ -38,7 +55,6 @@ class Eval_Agent(object):
             finished_jsons = {'finished': []}
 
         self.finished_list = finished_jsons['finished']
-
         for dir_name, subdir_list, file_list in walklevel(data_path, level=2):
             if "trial_" in dir_name:
                 json_file = os.path.join(dir_name, 'traj_data.json')
@@ -59,11 +75,11 @@ class Eval_Agent(object):
 
             print ("(%d Left) Evaluating: %s" % (len(traj_list), json_file))
             try:
-                success, gc, gn = self.execute_navigation(self, env, json_file)
+                success, gc, gn = self.execute_task(env, json_file)
                 trial_num += 1
                 trial_success += success
-                goal_num += gc
-                goal_success += gn
+                goal_num += gn
+                goal_success += gc
 
                 print("Complete %d/%d tasks, and %d/%d goals."%(trial_success, trial_num, goal_success, goal_num))
                 finished_list.append(json_file)
@@ -102,8 +118,12 @@ class Eval_Agent(object):
         img = cv2.cvtColor(img,cv2.COLOR_RGB2BGR)
         cv2.imwrite('Traj.png', img)
 
-    def execute_navigation(self, env, traj_data):
-        traj_data = json.load(open(json_file))
+    def execute_task(self, env, traj_data, r_idx=0):
+        device='cuda:0'
+        self.object_model.to_device(device)
+        self.recep_model.to_device(device)
+
+        traj_data = json.load(open(traj_data))
         # scene setup
         scene_num = traj_data['scene']['scene_num']
         object_poses = traj_data['scene']['object_poses']
@@ -117,13 +137,14 @@ class Eval_Agent(object):
 
         env.set_task(traj_data, self.args, reward_type='dense')
 
-        if self.use_gt_nav:
-            for ll_idx, ll_action in enumerate(traj_data['plan']['low_actions']):
-                cmd = ll_action['api_action']
-                cmd = {k: cmd[k] for k in ['action', 'objectId', 'receptacleObjectId', 'placeStationary', 'forceAction'] if k in cmd}
-                event = env.step(cmd)
-                if not event.metadata['lastActionSuccess']:
-                    raise Exception("Replay Failed: %s" % (env.last_event.metadata['errorMessage']))
+        instructions = traj_data['turk_annotations']['anns'][r_idx]['high_descs']
+
+        for inst_idx, inst in enumerate(instructions):
+            inst_type = self.inst2type[inst.lower().strip()]
+            if inst_type == 'navigation':
+                self.do_navigation(env, inst, traj_data, inst_idx)
+            elif inst_type == 'interaction':
+                self.do_interaction(env, inst, traj_data, inst_idx)
 
         if env.get_goal_satisfied():
             print("Goal Reached")
@@ -134,12 +155,265 @@ class Eval_Agent(object):
 
         goal_success, goal_num = env.get_goal_conditions_met()
 
+        print(success, goal_success, goal_num)
         return success, goal_success, goal_num
 
+    def do_navigation(self, env, inst, traj_data, inst_idx):
+        if self.use_gt_nav:
+            for ll_idx, ll_action in enumerate(traj_data['plan']['low_actions']):
+                if ll_action['high_idx'] == inst_idx:
+                    cmd = ll_action['api_action']
+                    cmd = {k: cmd[k] for k in ['action', 'objectId', 'receptacleObjectId', 'placeStationary', 'forceAction'] if k in cmd}
+                    event = env.step(cmd)
+                    if not event.metadata['lastActionSuccess']:
+                        raise Exception("Replay Failed: %s" % (env.last_event.metadata['errorMessage']))
+        else:
+            subpolicy_idx = 0
+            traj_key = str(traj_data['scene']['scene_num']) + '/' + traj_data['task_id']
+
+            if self.use_gt_subpolicy:
+                subpolicy = self.subpolicy_dict[traj_key].pop(0)
+                subpolicy = subpolicy.split(' ')
+                for s in range(len(subpolicy)//2):
+                    self.subpolicy_list.append(subpolicy[2*s] + ' ' + subpolicy[2*s+1])
+            else:
+                print('GT:', self.subpolicy_dict[traj_key].pop(0))
+                rgb_image = self.get_panorama_image(env, env.last_event)
+                with torch.no_grad():
+                    patch_feat = self.object_model.extract_cnn_features(rgb_image)
+                    obj_cls, _, _  = self.object_model.extract_roi_features(rgb_image)
+                    recep_cls, _, _ = self.recep_model.extract_roi_features(rgb_image)
+                pred_subpolicy = self.subpolicy_model.predict(inst, traj_data, patch_feat, obj_cls, recep_cls)
+                self.subpolicy_list += (pred_subpolicy)
+
+            subpolicy_count = 0
+            while self.subpolicy_list:
+                curr_subpolicy = self.subpolicy_list.pop(0)
+                print('Curr subpolicy:', curr_subpolicy, self.subpolicy_list)
+                subpolicy_count += 1
+                next_subpolicy = False
+                first_ll_action = True
+                ll_action_count = 0
+                while not next_subpolicy and ll_action_count < 30:
+                    if curr_subpolicy == 'turn left':
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateLeft')
+                        next_subpolicy = True
+                    elif curr_subpolicy == 'turn right':
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
+                        next_subpolicy = True
+                    elif curr_subpolicy == 'turn around':
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
+                        next_subpolicy = True
+                    elif curr_subpolicy == 'step back':
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
+                        success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
+                        success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
+                        next_subpolicy = True
+                    elif curr_subpolicy == 'step left':
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateLeft')
+                        success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
+                        success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
+                        next_subpolicy = True
+                    elif curr_subpolicy == 'step right':
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
+                        success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
+                        success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateLeft')
+                        next_subpolicy = True
+                    elif curr_subpolicy == 'face left' and first_ll_action:
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateLeft')
+                        first_ll_action = False
+                    elif curr_subpolicy == 'face right' and first_ll_action:
+                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
+                        first_ll_action = False
+
+                    else:
+                        rgb_image = self.get_panorama_image(env, env.last_event)
+                        with torch.no_grad():
+                            patch_feat = self.object_model.extract_cnn_features(rgb_image)
+                            obj_cls, _, _  = self.object_model.extract_roi_features(rgb_image)
+                            recep_cls, _, _ = self.recep_model.extract_roi_features(rgb_image)
+                        pred_action = self.ll_model.predict(inst, traj_data, patch_feat, obj_cls, recep_cls, curr_subpolicy)
+                        if pred_action == 'Interaction':
+                            next_subpolicy = True
+                        else:
+                            success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
+                            ll_action_count += 1
+        return
+
+    def do_interaction(self, env, inst, traj_data, inst_idx):
+        debug_dir = '/data/joey/alfred_metadata/debug'
+        action_seq = self.inst2action[inst.lower().strip()]
+        action_len = len(action_seq)
+        last_action = ''
+        for i in range(len(action_seq) // 2):
+            curr_action = action_seq[i * 2]
+            target_object = action_seq[i * 2 + 1]
+            if last_action == 'OpenObject' and curr_action == 'PutObject':
+                interaction_mask = self.open_mask
+            elif curr_action == 'CloseObject':
+                interaction_mask = self.open_mask
+            else:
+                if self.use_gt_mask:
+                    interaction_mask = self.get_interaction_mask_gt(env, target_object)
+                else:
+                    interaction_mask = self.get_interaction_mask(env, target_object)
+            success, event, target_instance_id, err, _ = env.va_interact(curr_action, interact_mask=interaction_mask)
+            if success and curr_action == 'OpenObject':
+                self.open_mask = copy.deepcopy(interaction_mask)
+            if not success:
+                print(target_object, curr_action, err)
+            # if not success and (target_object=='Cabinet' or target_object=='Drawer'):
+            #     img_idx = len(os.listdir(debug_dir))
+            #     cv2.imwrite(os.path.join(debug_dir, '%d_view.png' % img_idx), env.last_event.frame)
+            #     cv2.imwrite(os.path.join(debug_dir, '%d_mask.png' % img_idx), interaction_mask*255)
+            last_action = curr_action
 
 
-    def execute_interaction(self, env):
-        pass
+        return
+
+    def get_interaction_mask_gt(self, env, object_type):
+        mask = np.zeros((300, 300))
+        found = False
+        for k, v in env.last_event.instance_masks.items():
+            category = k.split('|')[0]
+            category_last = k.split('|')[-1]
+            if 'Sliced' in category_last:
+                category = category + 'Sliced'
+            if 'Sink' in category and 'SinkBasin' in category_last:
+                category =  'SinkBasin' 
+            if 'Bathtub' in category and 'BathtubBasin' in category_last:
+                category =  'BathtubBasin'
+            if category == object_type:
+                found = True
+                mask = v
+                break
+        if found:
+            # print('found', category, object_type)
+            return mask
+        else:
+            # print('not found')
+            if object_type in ['ButterKnife', 'Knife']:
+                object_type = ['ButterKnife', 'Knife']
+            elif object_type in ['Mug', 'Cup']:
+                object_type = ['Mug', 'Cup']
+            elif object_type in ['FloorLamp', 'DeskLamp']:
+                object_type = ['FloorLamp', 'DeskLamp']
+            elif object_type in ['Spoon', 'Ladle']:
+                object_type = ['Spoon', 'Ladle']
+            elif object_type in ['DiningTable', 'SideTable', 'Dresser', 'CounterTop']:
+                object_type = ['DiningTable', 'SideTable', 'Dresser', 'CounterTop']
+
+            for k, v in env.last_event.instance_masks.items():
+                category = k.split('|')[0]
+                category_last = k.split('|')[-1]
+                if 'Sliced' in category_last:
+                    category = category + 'Sliced'
+                if 'Sink' in category and 'SinkBasin' in category_last:
+                    category =  'SinkBasin' 
+                if 'Bathtub' in category and 'BathtubBasin' in category_last:
+                    category =  'BathtubBasin'
+                if category in object_type:
+                    found = True
+                    print('found in second search', category, object_type)
+                    mask = v
+
+        if np.sum(mask) == 0:
+            mask = None
+        return mask
+
+    def get_interaction_mask(self, env, object_type):
+        mask = np.zeros((300, 300))
+        if object_type in OBJECTS_DETECTOR:
+            prediction = self.object_model.predict_mask(env.last_event.frame)
+        elif object_type in STATIC_RECEPTACLES:
+            prediction = self.recep_model.predict_mask(env.last_event.frame)
+        else:
+            print('object doesnot exist in the detector', object_type)
+
+        scores = prediction['scores']
+        pred_masks = prediction['pred_masks']
+        pred_classes = prediction['pred_classes']
+        for i in range(len(scores)):
+            if pred_classes[i] == object_type:
+                mask = pred_masks[i].astype(np.float32)
+                # print('find', pred_classes[i])
+                return mask
+
+        if object_type in ['ButterKnife', 'Knife']:
+            object_type = ['ButterKnife', 'Knife']
+        elif object_type in ['Mug', 'Cup']:
+            object_type = ['Mug', 'Cup']
+        elif object_type in ['FloorLamp', 'DeskLamp']:
+            object_type = ['FloorLamp', 'DeskLamp']
+        elif object_type in ['Spoon', 'Ladle']:
+            object_type = ['Spoon', 'Ladle']
+        elif object_type in ['DiningTable', 'SideTable', 'Dresser', 'CounterTop']:
+            object_type = ['DiningTable', 'SideTable', 'Dresser', 'CounterTop']
+        
+        for i in range(len(scores)):
+            if pred_classes[i] in object_type:
+                mask = pred_masks[i].astype(np.float32)
+                # print('find', pred_classes[i])
+                return mask
+
+        if np.sum(mask) == 0:
+            mask = None
+        return mask
+
+    def get_max_interaction_mask(self, env, object_type):
+        mask = np.zeros((300, 300))
+        if object_type in OBJECTS_DETECTOR:
+            prediction = self.object_model.predict_mask(env.last_event.frame)
+        elif object_type in STATIC_RECEPTACLES:
+            prediction = self.recep_model.predict_mask(env.last_event.frame)
+        else:
+            print('object doesnot exist in the detector', object_type)
+
+        max_area = 0
+        scores = prediction['scores']
+        pred_masks = prediction['pred_masks']
+        pred_classes = prediction['pred_classes']
+        for i in range(len(scores)):
+            if pred_classes[i] == object_type:
+                # print('find', pred_classes[i])
+                temp_mask = pred_masks[i].astype(np.float32)
+                mask_area = np.sum(temp_mask)
+                if mask_area > max_area:
+                    max_area = mask_area
+                    mask = temp_mask
+                    print(max_area)
+
+        if max_area != 0:
+            return mask
+
+        if object_type in ['ButterKnife', 'Knife']:
+            object_type = ['ButterKnife', 'Knife']
+        elif object_type in ['Mug', 'Cup']:
+            object_type = ['Mug', 'Cup']
+        elif object_type in ['FloorLamp', 'DeskLamp']:
+            object_type = ['FloorLamp', 'DeskLamp']
+        elif object_type in ['Spoon', 'Ladle']:
+            object_type = ['Spoon', 'Ladle']
+        elif object_type in ['DiningTable', 'SideTable', 'Dresser', 'CounterTop']:
+            object_type = ['DiningTable', 'SideTable', 'Dresser', 'CounterTop']
+        
+        for i in range(len(scores)):
+            if pred_classes[i] in object_type:
+                temp_mask = pred_masks[i].astype(np.float32)
+                mask_area = np.sum(temp_mask)
+                if mask_area > max_area:
+                    max_area = mask_area
+                    mask = temp_mask
+
+        if np.sum(mask) == 0:
+            mask = None
+        return mask
 
     def predict_waypoint(self, env, json_file, waypoint_file):
         device='cuda:0'
@@ -276,7 +550,7 @@ class Eval_Agent(object):
         }
         env.step(teleport_action)
 
-        return rgb_image, depth_image
+        return rgb_image
 
     def panorama_action(self, env, event):
         color_to_obj_id_type = {}
