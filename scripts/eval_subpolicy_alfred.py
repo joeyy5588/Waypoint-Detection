@@ -10,7 +10,7 @@ if __name__ == '__main__':
     parser.add_argument('--recep_model_path', type=str, default="/home/joey/vln_detector/ckpt/newdata_recep/model_final.pth")
     parser.add_argument('--detection_config_file', type=str, default="/home/joey/vln_detector/configs/baseline_r50_2x.py")
     parser.add_argument('--subpolicy_model_path', type=str, default="/data/joey/alfred_metadata/subpolicy/checkpoint-2000")
-    parser.add_argument('--ll_model_path', type=str, default="/data/joey/alfred_metadata/ll_action/checkpoint-2000")
+    parser.add_argument('--ll_model_path', type=str, default="/data/joey/alfred_metadata/ll_action/checkpoint-1000")
     parser.add_argument('--shuffle', dest='shuffle', action='store_true')
     parser.add_argument('--num_threads', type=int, default=1)
     parser.add_argument('--reward_config', type=str, default='/home/joey/alfworld/alfworld/agents/config/rewards.json')

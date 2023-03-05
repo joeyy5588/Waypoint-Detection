@@ -1,7 +1,7 @@
 import torch
-from waynav.data import Low_Level_Dataset
-from waynav.data.collate import Low_Level_Collator
-from waynav.model import VLN_LL_Action
+from waynav.data import Low_Level_Dataset, Boundary_Dataset
+from waynav.data.collate import Low_Level_Collator, Boundary_Collator
+from waynav.model import VLN_LL_Action, VLN_Boundary
 from waynav.trainer import Low_Level_Trainer
 from waynav.eval import compute_confusion_matrix
 from transformers import TrainingArguments, AutoConfig
@@ -10,15 +10,15 @@ from torch.profiler import profile, record_function, ProfilerActivity
 train_data_dir = '/local1/cfyang/low_level_train'
 eval_data_dir = '/local1/cfyang/low_level_valid_seen'
 unseen_eval_data_dir = '/local1/cfyang/low_level_valid_unseen'
-train_dataset = Low_Level_Dataset(train_data_dir)
-eval_dataset = Low_Level_Dataset(eval_data_dir)
-unseen_eval_dataset = Low_Level_Dataset(unseen_eval_data_dir)
+train_dataset = Boundary_Dataset(train_data_dir)
+eval_dataset = Boundary_Dataset(eval_data_dir)
+unseen_eval_dataset = Boundary_Dataset(unseen_eval_data_dir)
 eval_dataset_dict = {
     'seen': eval_dataset,
     'unseen': unseen_eval_dataset
 }
 tokenizer = train_dataset.tokenizer
-data_collator = Low_Level_Collator(tokenizer)
+data_collator = Boundary_Collator(tokenizer)
 
 config = AutoConfig.from_pretrained('bert-base-uncased')
 # config.update({'num_hidden_layers': 12})
@@ -26,8 +26,8 @@ config = AutoConfig.from_pretrained('bert-base-uncased')
 
 pretrain_weight = 'bert-base-uncased'
 # pretrain_weight = "/local1/cfyang/output/subpolicy/ll_action/checkpoint-1000"
-model = VLN_LL_Action.from_pretrained(pretrain_weight, config=config)
-output_path = "/local1/cfyang/output/subpolicy/ll_new_sub_init"
+model = VLN_Boundary.from_pretrained(pretrain_weight, config=config)
+output_path = "/local1/cfyang/output/subpolicy/ll_boundary"
 batch_size = 128
 learning_rate = 1e-4
 save_steps = 500
@@ -39,7 +39,7 @@ training_args = TrainingArguments(
     warmup_ratio=0.2,
     per_device_train_batch_size=batch_size,
     per_device_eval_batch_size=batch_size,
-    # dataloader_num_workers=4,
+    # dataloader_num_workers=2,
     num_train_epochs=10,
     # max_steps=200,
     weight_decay=0.0001,

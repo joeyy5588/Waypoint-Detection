@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from transformers import AutoTokenizer, AutoConfig
-from waynav.model import BartForSubpolicyGeneration, VLN_LL_Action
+from waynav.model import BartForSubpolicyGeneration, VLN_LL_Action, VLN_Boundary
 import json, os
 
 def prepare_direction_input(tokenizer, patch_feat, obj_cls, recep_cls, instruction, actseq_list, dist_list):
@@ -159,7 +159,7 @@ class Navigation_Helper:
         # For ll action
         elif level == 'low':
             config = AutoConfig.from_pretrained('bert-base-uncased')
-            self.model = VLN_LL_Action.from_pretrained(args.ll_model_path, config=config)
+            self.model = VLN_Boundary.from_pretrained(args.ll_model_path, config=config)
             self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
         self.level = level
@@ -297,14 +297,15 @@ class Navigation_Helper:
 
         return input_dict
 
-    def prepare_ll_inputs(self, instruction, traj_data, patch_feat, obj_cls, recep_cls, subpolicy):
+    def prepare_ll_inputs(self, instruction, traj_data, patch_feat, obj_cls, recep_cls, curr_subpolicy, next_subpolicy):
         processed_instruction = self.process_instruction(instruction, traj_data)
+        processed_instruction = process_instruction + ' [SEP] ' + 'current subpolicy: ' + str(curr_subpolicy) + ' [SEP] ' + 'next subpolicy: ' + str(next_subpolicy)
         input_ids = self.tokenizer(processed_instruction)
         view_idx_lists = []
-        view_step_lists = []
+        # view_step_lists = []
         for i in range(8):
             view_idx_lists.append(i%4 + 1)
-            view_step_lists.append(1)
+            # view_step_lists.append(1)
 
         obj_input_ids = 0
         for i in range(4):
@@ -322,7 +323,7 @@ class Navigation_Helper:
             if i == 0:
                 obj_input_ids = obj_input_id
                 view_idx_lists += [i+1] * len(obj_input_id["input_ids"])
-                view_step_lists += [1] * len(obj_input_id["input_ids"])
+                # view_step_lists += [1] * len(obj_input_id["input_ids"])
             else:
                 for k, v in obj_input_id.items():
                     # Remove the CLS token
@@ -330,23 +331,23 @@ class Navigation_Helper:
                     obj_input_ids[k] += list_to_add
 
                 view_idx_lists += [i+1] * (len(obj_input_id["input_ids"])-1)
-                view_step_lists += [1] * (len(obj_input_id["input_ids"])-1)
+                # view_step_lists += [1] * (len(obj_input_id["input_ids"])-1)
 
         all_attn_mask = torch.ones(len(input_ids['input_ids'])+1+len(view_idx_lists), dtype=torch.long)
-        subpolicy = self.subpolicy_to_int[subpolicy]
+
         input_dict = {
             'input_ids': torch.LongTensor(input_ids['input_ids']),
             'obj_input_ids': torch.LongTensor(obj_input_ids['input_ids']),
             'img_feat': patch_feat,
             'view_idx': torch.LongTensor(view_idx_lists),
-            'view_step': torch.LongTensor(view_step_lists),
+            # 'view_step': torch.LongTensor(view_step_lists),
             'attention_mask': all_attn_mask,
-            'subpolicy': torch.LongTensor([subpolicy]),
+            # 'subpolicy': torch.LongTensor([subpolicy]),
         }
 
         return input_dict
 
-    def predict(self, inst, traj_data, patch_feat, obj_cls, recep_cls, subpolicy=None):
+    def predict(self, inst, traj_data, patch_feat, obj_cls, recep_cls, curr_subpolicy=None, next_subpolicy=None):
         if self.level == 'high':
             inputs = self.prepare_subpolicy_inputs(inst, traj_data, patch_feat, obj_cls, recep_cls)
             for k, v in inputs.items():
@@ -381,7 +382,7 @@ class Navigation_Helper:
                 preds = [self.int_to_subpolicy[p] for p in preds]
                 return preds
         else:
-            inputs = self.prepare_ll_inputs(inst, traj_data, patch_feat, obj_cls, recep_cls, subpolicy)
+            inputs = self.prepare_ll_inputs(inst, traj_data, patch_feat, obj_cls, recep_cls, curr_subpolicy, next_subpolicy)
             for k, v in inputs.items():
                 inputs[k] = v.unsqueeze(0).to(self.device)
 

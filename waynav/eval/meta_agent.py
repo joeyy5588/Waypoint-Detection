@@ -189,6 +189,10 @@ class Eval_Subpolicy_Agent(object):
             subpolicy_count = 0
             while self.subpolicy_list:
                 curr_subpolicy = self.subpolicy_list.pop(0)
+                if self.subpolicy_list:
+                    next_subpolicy = self.subpolicy_list[0]
+                else:
+                    next_subpolicy = "interaction"
                 print('Curr subpolicy:', curr_subpolicy, self.subpolicy_list)
                 subpolicy_count += 1
                 next_subpolicy = False
@@ -238,7 +242,7 @@ class Eval_Subpolicy_Agent(object):
                             patch_feat = self.object_model.extract_cnn_features(rgb_image)
                             obj_cls, _, _  = self.object_model.extract_roi_features(rgb_image)
                             recep_cls, _, _ = self.recep_model.extract_roi_features(rgb_image)
-                        pred_action = self.ll_model.predict(inst, traj_data, patch_feat, obj_cls, recep_cls, curr_subpolicy)
+                        pred_action = self.ll_model.predict(inst, traj_data, patch_feat, obj_cls, recep_cls, curr_subpolicy, next_subpolicy)
                         if pred_action == 'Interaction':
                             next_subpolicy = True
                         else:
@@ -415,105 +419,6 @@ class Eval_Subpolicy_Agent(object):
             mask = None
         return mask
 
-    def predict_waypoint(self, env, json_file, waypoint_file):
-        device='cuda:0'
-        self.object_model.to_device(device)
-        self.recep_model.to_device(device)
-        self.distance_model.to(device)
-        self.distance_model.eval()
-
-        self.direction_model.to('cuda:2')
-        self.direction_model.eval()
-
-        traj_data = json.load(open(json_file))
-        waypoint_data = json.load(open(waypoint_file))
-        traj_data['images'] = list()
-
-        navpoint_idx = waypoint_data['navigation_point']
-
-        # scene setup
-        scene_num = traj_data['scene']['scene_num']
-        object_poses = traj_data['scene']['object_poses']
-        object_toggles = traj_data['scene']['object_toggles']
-        dirty_and_empty = traj_data['scene']['dirty_and_empty']
-
-        # reset
-        scene_name = 'FloorPlan%d' % scene_num
-        env.reset(scene_name)
-        env.restore_scene(object_poses, object_toggles, dirty_and_empty)
-        event = env.step(dict(traj_data['scene']['init_action']))
-
-        env.set_task(traj_data, self.args, reward_type='dense')
-
-        fail = 0
-        progress_indicator = 0
-        total_goals = len(navpoint_idx)
-        complete_goals = 0
-        predicted_waypoints = []
-        actseq_list = [1]
-        dist_list = [0]
-        while fail < 14 and complete_goals < total_goals:
-            last_event = event
-            current_nav_point = \
-            (waypoint_data['traj']['x'][navpoint_idx[progress_indicator]+1], waypoint_data['traj']['z'][navpoint_idx[progress_indicator]+1])
-            current_instruction = waypoint_data['instructions'][navpoint_idx[progress_indicator]]
-
-            rgb_image, depth_image = self.get_panorama_image(env, event)
-            with torch.no_grad():
-                patch_feat = self.object_model.extract_cnn_features(rgb_image)
-                obj_cls, obj_box, obj_feat = self.object_model.extract_roi_features(rgb_image)
-                recep_cls, recep_box, recep_feat = self.recep_model.extract_roi_features(rgb_image)
-
-            direction_input = prepare_direction_input(self.tokenizer, patch_feat, obj_cls, recep_cls, current_instruction, actseq_list, dist_list)
-            pred_dir, pred_dist = predict_direction(self.direction_model, direction_input)
-            if pred_dir == 0:
-                event = env.step({'action': 'RotateLeft', 'forceAction': True})
-            elif pred_dir == 2:
-                event = env.step({'action': 'RotateRight', 'forceAction': True})
-            elif pred_dir == 3:
-                event = env.step({'action': 'RotateRight', 'forceAction': True})
-                event = env.step({'action': 'RotateRight', 'forceAction': True})
-
-            # distance_input = prepare_distance_input(self.tokenizer, obj_feat, obj_box, obj_cls, recep_feat, recep_box, recep_cls, current_instruction, pred_dir)
-            # pred_dist = predict_distance(self.distance_model, distance_input)
-
-            move_success = 0
-            for i in range(pred_dist):
-                event = env.step({'action': 'MoveAhead', 'forceAction': True})
-                if event.metadata['lastActionSuccess']:
-                    move_success += 1
-                else:
-                    break
-                    # print(event.metadata['errorMessage'])
-
-            actseq_list.append(pred_dir)
-            dist_list.append(move_success)
-
-            next_action = event.metadata["agent"]['position']
-            # print(last_event.metadata["agent"]['position'], current_nav_point, next_action, pred_dir, pred_dist)
-            predicted_waypoints.append((next_action['x'], next_action['z']))
-            if (next_action['x'], next_action['z']) == current_nav_point:
-                progress_indicator += 1
-                complete_goals += 1
-                fail = 0
-                actseq_list = [1]
-                dist_list = [0]
-                print("Direct Success!")
-            elif abs(next_action['x'] - current_nav_point[0]) + abs(next_action['z'] - current_nav_point[1]) < 0.5:
-                # print(next_action['x'], next_action['z'], current_nav_point)
-                progress_indicator += 1
-                complete_goals += 1
-                fail = 0
-                actseq_list = [1]
-                dist_list = [0]
-                print("Approximate Success!")
-            else:
-                fail+=1
-                # if not event.metadata['lastActionSuccess']:
-                #     print("Cannot move to here")
-                #     return predicted_waypoints, -1
-
-        return predicted_waypoints, complete_goals, total_goals
 
     def get_panorama_image(self, env, event):
         yaw = round(event.metadata["agent"]['cameraHorizon'])

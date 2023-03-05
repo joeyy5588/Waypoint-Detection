@@ -157,12 +157,12 @@ class Low_Level_Trainer(Trainer):
             f"{metric_key_prefix}_action_acc": action_correct / data_num,
             # f"{metric_key_prefix}_boundary_loss": boundary_loss / data_num,
             # f"{metric_key_prefix}_boundary_acc": boundary_correct / data_num,
-            f"{metric_key_prefix}_move_acc": action_confmat[0,0].item() / torch.sum(action_confmat, dim=1)[0].item(),
-            f"{metric_key_prefix}_left_acc": action_confmat[1,1].item() / torch.sum(action_confmat, dim=1)[1].item(),
-            f"{metric_key_prefix}_right_acc": action_confmat[2,2].item() / torch.sum(action_confmat, dim=1)[2].item(),
-            f"{metric_key_prefix}_interaction_acc": action_confmat[3,3].item() / torch.sum(action_confmat, dim=1)[3].item(),
-            # f"{metric_key_prefix}_nav_bound_acc": boundary_confmat[0,0].item() / torch.sum(boundary_confmat, dim=1)[0].item(),
-            # f"{metric_key_prefix}_interact_bound_acc": boundary_confmat[1,1].item() / torch.sum(boundary_confmat, dim=1)[1].item(),
+            # f"{metric_key_prefix}_move_acc": action_confmat[0,0].item() / torch.sum(action_confmat, dim=1)[0].item(),
+            # f"{metric_key_prefix}_left_acc": action_confmat[1,1].item() / torch.sum(action_confmat, dim=1)[1].item(),
+            # f"{metric_key_prefix}_right_acc": action_confmat[2,2].item() / torch.sum(action_confmat, dim=1)[2].item(),
+            # f"{metric_key_prefix}_interaction_acc": action_confmat[3,3].item() / torch.sum(action_confmat, dim=1)[3].item(),
+            f"{metric_key_prefix}_nav_bound_acc": action_confmat[0,0].item() / torch.sum(action_confmat, dim=1)[0].item(),
+            f"{metric_key_prefix}_interact_bound_acc": action_confmat[1,1].item() / torch.sum(action_confmat, dim=1)[1].item(),
         }
 
         self.log(metrics)

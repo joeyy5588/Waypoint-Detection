@@ -485,3 +485,56 @@ class Low_Level_Collator:
         }
 
         return input_dict
+
+class Boundary_Collator:
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+        self.padding = True
+        self.return_tensors = "pt"
+
+    def __call__(self, batch):
+
+        input_ids, all_img_feats, view_idx_lists, labels, obj_input_ids = [], [], [], [], []
+        
+
+        for data in batch:
+            input_ids.append(data[0])
+            all_img_feats.append(data[1])
+            view_idx_lists.append(data[2])
+            labels.append(data[3])
+            obj_input_ids.append(data[4])
+
+        input_ids = self.tokenizer(
+            input_ids,
+            padding=self.padding,
+            return_tensors=self.return_tensors,
+        )
+
+        if obj_input_ids != []:
+            obj_input_ids = self.tokenizer.pad(
+                obj_input_ids,
+                padding=self.padding,
+                return_tensors=self.return_tensors,
+            )['input_ids']
+
+        view_idx_lists = self.tokenizer.pad(
+            {"input_ids": view_idx_lists},
+            padding=self.padding,
+            return_tensors=self.return_tensors,
+        )
+
+        labels = torch.LongTensor(labels)
+        
+        img_feat = torch.from_numpy(np.array(all_img_feats))#.float()
+        all_attn_mask = torch.cat((input_ids['attention_mask'], view_idx_lists['attention_mask']), dim=1)
+
+        input_dict = {
+            'input_ids': input_ids['input_ids'],
+            'obj_input_ids': obj_input_ids,
+            'img_feat': img_feat,
+            'view_idx': view_idx_lists['input_ids'],
+            'attention_mask': all_attn_mask,
+            'labels': labels,
+        }
+
+        return input_dict
