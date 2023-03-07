@@ -25,10 +25,10 @@ config = AutoConfig.from_pretrained('bert-base-uncased')
 # config.update({'type_vocab_size': 5})
 
 pretrain_weight = 'bert-base-uncased'
-# pretrain_weight = "/local1/cfyang/output/subpolicy/ll_action/checkpoint-1000"
+pretrain_weight = "/local1/cfyang/output/subpolicy/ll_boundary/checkpoint-1000"
 model = VLN_Boundary.from_pretrained(pretrain_weight, config=config)
-output_path = "/local1/cfyang/output/subpolicy/ll_boundary"
-batch_size = 128
+output_path = "/local1/cfyang/output/subpolicy/ll_inference"
+batch_size = 256
 learning_rate = 1e-4
 save_steps = 500
 
@@ -61,8 +61,8 @@ trainer = Low_Level_Trainer(
     compute_metrics=compute_confusion_matrix
 )
 
-# trainer.evaluate(eval_dataset=unseen_eval_dataset)
-trainer.train()
+trainer.evaluate(eval_dataset=eval_dataset)
+# trainer.train()
 
 # from pyinstrument import Profiler
 # profiler = Profiler()

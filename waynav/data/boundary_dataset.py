@@ -86,6 +86,11 @@ class Boundary_Dataset:
         # shuffle(self.move_list)
         self.all_img_list = self.move_list[::4] + self.stop_list
         shuffle(self.all_img_list)
+        print(root_dir)
+        if 'valid' in root_dir:
+            self.all_img_list = self.img_fn_list
+            json.dump(self.img_fn_list, open(os.path.join('/local1/cfyang/output/subpolicy/ll_inference', root_dir.split('/')[-1]+'.json'), 'w+'))
+
         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
         # feature_fn = '/blip_feature.lmdb'
         feature_fn = '/objects_features.lmdb'
@@ -127,8 +132,12 @@ class Boundary_Dataset:
         return len(self.all_img_list)
 
     def __getitem__(self, idx):
-        idx = self.all_img_list[idx]
-        img_path = self.img_fn_list[idx]
+        if 'valid' in self.root_dir:
+            img_path = self.img_fn_list[idx]
+        else:
+            idx = self.all_img_list[idx]
+            img_path = self.img_fn_list[idx]
+
         traj_data = self.traj_list[idx]
         nav_point = int(img_path.split('images/')[1].split('.')[0])
         ll_action = traj_data['ll_action_list'][nav_point]

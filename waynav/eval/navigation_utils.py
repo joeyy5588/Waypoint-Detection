@@ -200,9 +200,10 @@ class Navigation_Helper:
 
         self.int_to_action = {
             0: 'MoveAhead',
-            1: 'RotateLeft',
-            2: 'RotateRight',
-            3: 'Interaction',
+            # 1: 'RotateLeft',
+            # 2: 'RotateRight',
+            # 3: 'Interaction',
+            1: 'Interaction',
         }
 
     def to_device(self, device):
@@ -299,7 +300,7 @@ class Navigation_Helper:
 
     def prepare_ll_inputs(self, instruction, traj_data, patch_feat, obj_cls, recep_cls, curr_subpolicy, next_subpolicy):
         processed_instruction = self.process_instruction(instruction, traj_data)
-        processed_instruction = process_instruction + ' [SEP] ' + 'current subpolicy: ' + str(curr_subpolicy) + ' [SEP] ' + 'next subpolicy: ' + str(next_subpolicy)
+        processed_instruction = processed_instruction + ' [SEP] ' + 'current subpolicy: ' + str(curr_subpolicy) + ' [SEP] ' + 'next subpolicy: ' + str(next_subpolicy)
         input_ids = self.tokenizer(processed_instruction)
         view_idx_lists = []
         # view_step_lists = []
@@ -333,7 +334,7 @@ class Navigation_Helper:
                 view_idx_lists += [i+1] * (len(obj_input_id["input_ids"])-1)
                 # view_step_lists += [1] * (len(obj_input_id["input_ids"])-1)
 
-        all_attn_mask = torch.ones(len(input_ids['input_ids'])+1+len(view_idx_lists), dtype=torch.long)
+        all_attn_mask = torch.ones(len(input_ids['input_ids'])+len(view_idx_lists), dtype=torch.long)
 
         input_dict = {
             'input_ids': torch.LongTensor(input_ids['input_ids']),

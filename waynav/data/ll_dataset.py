@@ -180,6 +180,7 @@ class Low_Level_Dataset:
     def __getitem__(self, idx):
         idx = self.all_img_list[idx]
         img_path = self.img_fn_list[idx]
+
         traj_data = self.traj_list[idx]
         nav_point = int(img_path.split('images/')[1].split('.')[0])
         ll_action = traj_data['ll_action_list'][nav_point]

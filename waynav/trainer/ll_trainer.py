@@ -16,7 +16,7 @@ from transformers.trainer_callback import TrainerState
 import torch.distributed as dist
 from torchmetrics import ConfusionMatrix
 
-import math, time, os
+import math, time, os, json
 
 
 logger = logging.get_logger(__name__)
@@ -151,7 +151,8 @@ class Low_Level_Trainer(Trainer):
 
         action_confmat = self.action_confmat(torch.stack(all_action_preds).cpu(), torch.stack(all_action_labels).cpu())
         # boundary_confmat = self.boundary_confmat(torch.stack(all_boundary_preds).cpu(), torch.stack(all_boundary_labels).cpu())
-        
+        out_dict = {'preds': torch.stack(all_action_preds).cpu().tolist(), 'labels': torch.stack(all_action_labels).cpu().tolist()}
+        json.dump(out_dict, open(self.args.output_dir + '/seen_pred.json', 'w'))
         metrics = {
             f"{metric_key_prefix}_action_loss": action_loss / data_num,
             f"{metric_key_prefix}_action_acc": action_correct / data_num,
