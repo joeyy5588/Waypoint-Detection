@@ -1,4 +1,4 @@
-import os
+import os, sys
 import json
 import cv2
 import matplotlib.pyplot as plt
@@ -13,6 +13,7 @@ from waynav.model import VLN_Navigator, ROI_Waypoint_Predictor
 from .navigation_utils import Navigation_Helper
 import math
 import torch
+import logging
 
 class Eval_Subpolicy_Agent(object):
     def __init__(self, args):
@@ -20,11 +21,11 @@ class Eval_Subpolicy_Agent(object):
         data_path = args.data_path
         save_path = args.save_path
         split = data_path.split('/')[-1]
-        split_fn = json.load(open('/data/joey/alfred_metadata/oct21.json'))
-        inst_dict = json.load(open('/data/joey/alfred_metadata/'+split+'/inst_dict.json'))
+        split_fn = json.load(open('/home/ubuntu/alfred/data/splits/oct21.json'))
+        inst_dict = json.load(open(args.metadata_path+split+'/inst_dict.json'))
         if 'valid' in split:
-            self.subpolicy＿dict = json.load(open('/data/joey/alfred_metadata/'+split+'/subpolicy_sidestep.json'))
-            self.ll_seq_dict = json.load(open('/data/joey/alfred_metadata/'+split+'/ll_seq.json'))
+            self.subpolicy＿dict = json.load(open(args.metadata_path+split+'/subpolicy_sidestep.json'))
+            self.ll_seq_dict = json.load(open(args.metadata_path+split+'/ll_seq.json'))
         else:
             self.subpolicy_dict = None
 
@@ -53,78 +54,96 @@ class Eval_Subpolicy_Agent(object):
             with open(cache_file, 'r') as f:
                 finished_jsons = json.load(f)
         else:
-            finished_jsons = {'finished': []}
+            finished_jsons = {'finished': [], 'success': [], 'failed': []}
 
         self.finished_list = finished_jsons['finished']
+        self.success_list = finished_jsons['success']
+        self.failed_list = finished_jsons['failed']
         for dir_name, subdir_list, file_list in walklevel(data_path, level=2):
             if "trial_" in dir_name:
                 json_file = os.path.join(dir_name, 'traj_data.json')
                 self.traj_list.append(json_file)
+
+        # Format [{traj_data['task_id']: actions}]
+        self.actseqs = []
+        self.logger = logging.getLogger(__name__)
+        logging_format = '%(message)s'
+        logFormatter = logging.Formatter(logging_format)
+
+        fileHandler = logging.FileHandler(os.path.join(args.save_path, 'debug.log'))
+        fileHandler.setFormatter(logFormatter)
+        fileHandler.setLevel(logging.INFO)
+        self.logger.addHandler(fileHandler)
+
+        consoleHandler = logging.StreamHandler(sys.stdout)
+        consoleHandler.setFormatter(logFormatter)
+        consoleHandler.setLevel(logging.INFO)
+        self.logger.addHandler(consoleHandler)
 
 
     def run(self):
         env = ThorEnv(player_screen_width=300, player_screen_height=300)
         traj_list = self.traj_list
         finished_list = self.finished_list
+        success_list = self.success_list
+        falied_list = self.failed_list 
 
         trial_num = 0
         trial_success = 0
         goal_num = 0
         goal_success = 0
+        plw_success = 0
+        plw_gc = 0
         while len(traj_list) > 0:
             json_file = traj_list.pop()
+            traj_data = json.load(open(json_file))
+            trial_fn = json_file.split('/traj_data.json')[0]
+            print ("(%d Left) Evaluating: %s" % (len(traj_list), trial_fn))
 
-            print ("(%d Left) Evaluating: %s" % (len(traj_list), json_file))
+            if trial_fn in finished_list:
+                print("%s already evaluated." % trial_fn)
+                continue
+
             try:
-                success, gc, gn = self.execute_task(env, json_file)
+                success, gc, gn, actseq = self.execute_task(env, traj_data)
                 trial_num += 1
                 trial_success += success
                 goal_num += gn
                 goal_success += gc
+                pl= len(traj_data['plan']['low_actions'])
+                pred_pl = len(actseq)
+                plw = min(1.0, pl/pred_pl)
+                plw_success += plw*success
+                plw_gc += plw*gc
 
                 print("Complete %d/%d tasks, and %d/%d goals."%(trial_success, trial_num, goal_success, goal_num))
-                finished_list.append(json_file)
-                
+                finished_list.append(trial_fn)
+
+                if success:
+                    success_list.append(trial_fn)
+                else:
+                    falied_list.append(trial_fn)
+
+                finished_jsons = {'finished': finished_list, 'success': success_list, 'failed': falied_list}
+                cache_file = os.path.join(self.args.save_path, "cache.json")
+                json.dump(finished_jsons, open(cache_file, 'w+'))
 
             except Exception as e:
                 import traceback
                 traceback.print_exc()
                 print ("Error: " + repr(e))
 
+        
+
         env.stop()
         print("Finished.")
-        print("Task SR: %f, Task GC: %f" %(trial_success/ trial_num, goal_success/goal_num))
-
-    @classmethod
-    def plot_waypoint(cls, waypoint_file, predict_waypoint):
-        data = json.load(open(waypoint_file))
-        navpoint = data['navigation_point']
-        fig = plt.figure()
-        predict_x = [x[0] for x in predict_waypoint]
-        predict_z = [x[1] for x in predict_waypoint]
-
-        plt.scatter(data['traj']['x'], data['traj']['z'])
-        plt.scatter(data['traj']['x'][navpoint[1]], data['traj']['z'][navpoint[1]])
-        plt.scatter(data['traj']['x'][0], data['traj']['z'][0])
-        plt.scatter(predict_x[0], predict_z[0])
-        try:
-            plt.scatter(predict_x[1], predict_z[1])
-        except:
-            pass
-
-        fig.canvas.draw()
-        img = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
-        img  = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-        plt.close()
-        img = cv2.cvtColor(img,cv2.COLOR_RGB2BGR)
-        cv2.imwrite('Traj.png', img)
+        print("Task SR: %f, Task GC: %f PLW SR: %f, PLW GC: %f" \
+        %(trial_success/ trial_num, goal_success/goal_num, plw_success/ trial_num, plw_gc/ goal_num))
 
     def execute_task(self, env, traj_data, r_idx=0):
         device='cuda:0'
         self.object_model.to_device(device)
         self.recep_model.to_device(device)
-
-        traj_data = json.load(open(traj_data))
         # scene setup
         scene_num = traj_data['scene']['scene_num']
         object_poses = traj_data['scene']['object_poses']
@@ -140,29 +159,31 @@ class Eval_Subpolicy_Agent(object):
 
         instructions = traj_data['turk_annotations']['anns'][r_idx]['high_descs']
 
+        actseq = []
         for inst_idx, inst in enumerate(instructions):
             inst_type = self.inst2type[inst.lower().strip()]
             if inst_type == 'navigation':
-                self.do_navigation(env, inst, traj_data, inst_idx)
+                actions = self.do_navigation(env, inst, traj_data, inst_idx)
             elif inst_type == 'interaction':
-                self.do_interaction(env, inst, traj_data, inst_idx)
+                actions = self.do_interaction(env, inst, traj_data, inst_idx)
+            actseq += actions
 
         if env.get_goal_satisfied():
-            print("Goal Reached")
+            self.logger.info("Goal Reached")
             success = 1
         else:
-            print("Goal Not Reached")
+            self.logger.info("Goal Not Reached")
             success = 0
 
         goal_success, goal_num = env.get_goal_conditions_met()
 
-        print(success, goal_success, goal_num)
-        json.dump(traj_data, open(os.path.join('/data/joey/alfred_metadata/output/' + traj_data['task_id'], 'traj_data.json'), 'w'))
+        self.logger.info(success, goal_success, goal_num)
+        json.dump(traj_data, open(os.path.join(self.args.metadata_path, 'output2', traj_data['task_id'], 'traj_data.json'), 'w'))
 
-        return success, goal_success, goal_num
+        return success, goal_success, goal_num, act_seq
 
     def do_navigation(self, env, inst, traj_data, inst_idx):
-        debug_dir = '/data/joey/alfred_metadata/output/' + traj_data['task_id']
+        debug_dir = os.path.join(self.args.metadata_path, 'output2', traj_data['task_id'])
         if not os.path.exists(debug_dir):
             os.makedirs(debug_dir)
         meta_dict = {}
@@ -179,16 +200,16 @@ class Eval_Subpolicy_Agent(object):
             subpolicy_idx = 0
             traj_key = str(traj_data['scene']['scene_num']) + '/' + traj_data['task_id']
             ll_seq = self.ll_seq_dict[traj_key].pop(0)
-            print('GT Action:', ll_seq, 'Instruction:', inst)
+            self.logger.info('GT Action:', ll_seq, 'Instruction:', inst)
             if self.use_gt_subpolicy:
                 gt_subpolicy = self.subpolicy_dict[traj_key].pop(0)
                 subpolicy = gt_subpolicy.split(' ')
                 for s in range(len(subpolicy)//2):
                     self.subpolicy_list.append(subpolicy[2*s] + ' ' + subpolicy[2*s+1])
-                print('GT subpolicy:', self.subpolicy_list)
+                self.logger.info('GT subpolicy:', self.subpolicy_list)
             else:
                 gt_subpolicy = self.subpolicy_dict[traj_key].pop(0)
-                print('GT Subpolicy:', gt_subpolicy)
+                self.logger.info('GT Subpolicy:', gt_subpolicy)
                 rgb_image = self.get_panorama_image(env, env.last_event)
                 with torch.no_grad():
                     patch_feat = self.object_model.extract_cnn_features(rgb_image)
@@ -196,7 +217,7 @@ class Eval_Subpolicy_Agent(object):
                     recep_cls, _, _ = self.recep_model.extract_roi_features(rgb_image)
                 pred_subpolicy = self.subpolicy_model.predict(inst, traj_data, patch_feat, obj_cls, recep_cls)
                 self.subpolicy_list += (pred_subpolicy)
-                print('Predicted subpolicy:', self.subpolicy_list)
+                self.logger.info('Predicted subpolicy:', self.subpolicy_list)
 
             meta_dict['gt_subpolicy'] = gt_subpolicy
             meta_dict['pred_subpolicy'] = self.subpolicy_list.copy()
@@ -204,6 +225,7 @@ class Eval_Subpolicy_Agent(object):
             meta_dict['instruction'] = inst
             meta_dict['interaction_instruction'] = self.get_interaction_instruction(inst, traj_data)
 
+            ll_actions = []
             subpolicy_count = 0
             pred_ll_seq = ""
             while self.subpolicy_list:
@@ -311,7 +333,27 @@ class Eval_Subpolicy_Agent(object):
             json.dump(meta_dict, open(os.path.join(debug_dir, 'meta_{}.json'.format(inst_idx)), 'w'))
             print('Pred ll seq:', pred_ll_seq)
                     
-        return
+        return actseq
+
+    def step_and_log(self):
+
+
+    def get_interaction_instruction(self, instruction, traj_data):
+        all_instructions = traj_data['turk_annotations']['anns']
+        instruction_ridx = 0
+        instruction_high_idx = 0
+        for i in range(len(all_instructions)):
+            if instruction in all_instructions[i]['high_descs']:
+                instruction_ridx = i
+                instruction_high_idx = all_instructions[i]['high_descs'].index(instruction)
+                break
+
+        for i in range(instruction_high_idx, len(all_instructions[instruction_ridx]['high_descs'])):
+            if self.inst2type[all_instructions[instruction_ridx]['high_descs'][i].lower().strip()] == 'interaction':
+                interaction_instruction = all_instructions[instruction_ridx]['high_descs'][i]
+                break
+
+        return interaction_instruction
 
     def get_interaction_instruction(self, instruction, traj_data):
         all_instructions = traj_data['turk_annotations']['anns']
@@ -332,11 +374,12 @@ class Eval_Subpolicy_Agent(object):
 
 
     def do_interaction(self, env, inst, traj_data, inst_idx):
-        debug_dir = '/data/joey/alfred_metadata/output/' + traj_data['task_id']
+        debug_dir = os.path.join(self.args.metadata_path, 'output2', traj_data['task_id'])
         action_seq = self.inst2action[inst.lower().strip()]
         action_len = len(action_seq)
         last_action = ''
-        print('Do interaction:', action_seq)
+        ll_actions = []
+        self.logger.info('Do interaction:', action_seq)
         for i in range(len(action_seq) // 2):
             curr_action = action_seq[i * 2]
             target_object = action_seq[i * 2 + 1]
@@ -349,11 +392,13 @@ class Eval_Subpolicy_Agent(object):
                     interaction_mask = self.get_interaction_mask_gt(env, target_object)
                 else:
                     interaction_mask = self.get_interaction_mask(env, target_object)
-            success, event, target_instance_id, err, _ = env.va_interact(curr_action, interact_mask=interaction_mask)
+            success, event, target_instance_id, err, api_action = env.va_interact(curr_action, interact_mask=interaction_mask)
             if success and curr_action == 'OpenObject':
                 self.open_mask = copy.deepcopy(interaction_mask)
             if not success:
-                print(target_object, curr_action, err)
+                self.logger.info(target_object, curr_action, err)
+            if api_action:
+                ll_actions.append(api_action)
             # if not success and (target_object=='Cabinet' or target_object=='Drawer'):
             #    img_idx = len(os.listdir(debug_dir))
                 cv2.imwrite(os.path.join(debug_dir, '%s_%s_%s_view.png' % (target_object, curr_action, err)), env.last_event.frame[:, :, ::-1])
@@ -362,7 +407,7 @@ class Eval_Subpolicy_Agent(object):
                 cv2.imwrite(os.path.join(debug_dir, '%s_%s_%s_mask.png' % (target_object, curr_action, err)), interaction_mask*255)
             last_action = curr_action
 
-        return
+        return ll_actions
     
     def get_interaction_mask_gt(self, env, object_type):
         mask = np.zeros((300, 300))
