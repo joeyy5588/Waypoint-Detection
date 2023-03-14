@@ -20,6 +20,8 @@ class Eval_Subpolicy_Agent(object):
         # Path for testing data
         data_path = args.data_path
         save_path = args.save_path
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
         split = data_path.split('/')[-1]
         split_fn = json.load(open('/home/ubuntu/alfred/data/splits/oct21.json'))
         inst_dict = json.load(open(args.metadata_path+split+'/inst_dict.json'))
@@ -35,17 +37,20 @@ class Eval_Subpolicy_Agent(object):
         self.use_gt_nav = False
         # self.use_gt_lang = True
         self.use_gt_mask = False
-        self.use_gt_subpolicy = True
+        self.use_gt_subpolicy = False
         self.traj_list = []
         self.subpolicy_list = []
+        self.err_count = 0
         # self.model = model
         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
         self.object_model = Detection_Helper(args, args.object_model_path)
         self.recep_model = Detection_Helper(args, args.recep_model_path, object_types='receptacles')
 
-        self.subpolicy_model = Navigation_Helper(args, 'cuda:1', 'high')
-        self.ll_model = Navigation_Helper(args, 'cuda:1', 'low')
+        self.navigation_gpu = 'cuda:%s' % args.navigation_gpu
+        self.detection_gpu = 'cuda:%s' % args.detection_gpu
+        self.subpolicy_model = Navigation_Helper(args, self.navigation_gpu, 'high')
+        self.ll_model = Navigation_Helper(args, self.navigation_gpu, 'low')
         self.open_mask = None
 
         # cache
@@ -66,19 +71,26 @@ class Eval_Subpolicy_Agent(object):
 
         # Format [{traj_data['task_id']: actions}]
         self.actseqs = []
-        self.logger = logging.getLogger(__name__)
+        self.logger = self.setup_logger('logger', os.path.join(args.save_path, 'debug.log'))
+        self.logger.info("Start evaluating %s" % split)
+
+    def setup_logger(self, name, log_file, level=logging.INFO):
+        logger = logging.getLogger(name)
+        logger.setLevel(level)
         logging_format = '%(message)s'
         logFormatter = logging.Formatter(logging_format)
 
-        fileHandler = logging.FileHandler(os.path.join(args.save_path, 'debug.log'))
+        fileHandler = logging.FileHandler(log_file)
         fileHandler.setFormatter(logFormatter)
-        fileHandler.setLevel(logging.INFO)
-        self.logger.addHandler(fileHandler)
+        fileHandler.setLevel(level)
+        logger.addHandler(fileHandler)
 
         consoleHandler = logging.StreamHandler(sys.stdout)
         consoleHandler.setFormatter(logFormatter)
-        consoleHandler.setLevel(logging.INFO)
-        self.logger.addHandler(consoleHandler)
+        consoleHandler.setLevel(level)
+        logger.addHandler(consoleHandler)
+
+        return logger
 
 
     def run(self):
@@ -98,7 +110,7 @@ class Eval_Subpolicy_Agent(object):
             json_file = traj_list.pop()
             traj_data = json.load(open(json_file))
             trial_fn = json_file.split('/traj_data.json')[0]
-            print ("(%d Left) Evaluating: %s" % (len(traj_list), trial_fn))
+            self.logger.info("(%d Left) Evaluating: %s" % (len(traj_list), trial_fn))
 
             if trial_fn in finished_list:
                 print("%s already evaluated." % trial_fn)
@@ -118,15 +130,16 @@ class Eval_Subpolicy_Agent(object):
 
                 print("Complete %d/%d tasks, and %d/%d goals."%(trial_success, trial_num, goal_success, goal_num))
                 finished_list.append(trial_fn)
+                self.actseqs.append({traj_data['task_id']: actseq})
 
                 if success:
                     success_list.append(trial_fn)
                 else:
                     falied_list.append(trial_fn)
 
-                finished_jsons = {'finished': finished_list, 'success': success_list, 'failed': falied_list}
-                cache_file = os.path.join(self.args.save_path, "cache.json")
-                json.dump(finished_jsons, open(cache_file, 'w+'))
+                # finished_jsons = {'finished': finished_list, 'success': success_list, 'failed': falied_list}
+                # cache_file = os.path.join(self.args.save_path, "cache.json")
+                # json.dump(finished_jsons, open(cache_file, 'w+'))
 
             except Exception as e:
                 import traceback
@@ -136,14 +149,17 @@ class Eval_Subpolicy_Agent(object):
         
 
         env.stop()
-        print("Finished.")
-        print("Task SR: %f, Task GC: %f PLW SR: %f, PLW GC: %f" \
+        self.logger.info("Finished.")
+        self.logger.info("Task SR: %f, Task GC: %f PLW SR: %f, PLW GC: %f" \
         %(trial_success/ trial_num, goal_success/goal_num, plw_success/ trial_num, plw_gc/ goal_num))
 
+        finished_jsons = {'finished': finished_list, 'success': success_list, 'failed': falied_list}
+        cache_file = os.path.join(self.args.save_path, "cache.json")
+        json.dump(finished_jsons, open(cache_file, 'w+'))
+
     def execute_task(self, env, traj_data, r_idx=0):
-        device='cuda:0'
-        self.object_model.to_device(device)
-        self.recep_model.to_device(device)
+        self.object_model.to_device(self.detection_gpu)
+        self.recep_model.to_device(self.detection_gpu)
         # scene setup
         scene_num = traj_data['scene']['scene_num']
         object_poses = traj_data['scene']['object_poses']
@@ -154,6 +170,7 @@ class Eval_Subpolicy_Agent(object):
         env.reset(scene_name)
         env.restore_scene(object_poses, object_toggles, dirty_and_empty)
         event = env.step(dict(traj_data['scene']['init_action']))
+        self.err_count = 0
 
         env.set_task(traj_data, self.args, reward_type='dense')
 
@@ -177,16 +194,18 @@ class Eval_Subpolicy_Agent(object):
 
         goal_success, goal_num = env.get_goal_conditions_met()
 
-        self.logger.info(success, goal_success, goal_num)
-        json.dump(traj_data, open(os.path.join(self.args.metadata_path, 'output2', traj_data['task_id'], 'traj_data.json'), 'w'))
+        self.logger.info("%s %s %s", success, goal_success, goal_num)
+        # json.dump(traj_data, open(os.path.join(self.args.metadata_path, 'output2', traj_data['task_id'], 'traj_data.json'), 'w'))
 
-        return success, goal_success, goal_num, act_seq
+        return success, goal_success, goal_num, actseq
 
     def do_navigation(self, env, inst, traj_data, inst_idx):
-        debug_dir = os.path.join(self.args.metadata_path, 'output2', traj_data['task_id'])
+        debug_dir = os.path.join(self.args.debug_dir, traj_data['task_id'])
         if not os.path.exists(debug_dir):
             os.makedirs(debug_dir)
         meta_dict = {}
+
+        ll_actions = []
 
         if self.use_gt_nav:
             for ll_idx, ll_action in enumerate(traj_data['plan']['low_actions']):
@@ -194,30 +213,32 @@ class Eval_Subpolicy_Agent(object):
                     cmd = ll_action['api_action']
                     cmd = {k: cmd[k] for k in ['action', 'objectId', 'receptacleObjectId', 'placeStationary', 'forceAction'] if k in cmd}
                     event = env.step(cmd)
+                    ll_actions.append(cmd)
                     if not event.metadata['lastActionSuccess']:
                         raise Exception("Replay Failed: %s" % (env.last_event.metadata['errorMessage']))
         else:
             subpolicy_idx = 0
             traj_key = str(traj_data['scene']['scene_num']) + '/' + traj_data['task_id']
             ll_seq = self.ll_seq_dict[traj_key].pop(0)
-            self.logger.info('GT Action:', ll_seq, 'Instruction:', inst)
+            self.logger.info('GT Action: %s, Instruction: %s', ll_seq, inst)
             if self.use_gt_subpolicy:
                 gt_subpolicy = self.subpolicy_dict[traj_key].pop(0)
                 subpolicy = gt_subpolicy.split(' ')
                 for s in range(len(subpolicy)//2):
                     self.subpolicy_list.append(subpolicy[2*s] + ' ' + subpolicy[2*s+1])
-                self.logger.info('GT subpolicy:', self.subpolicy_list)
+                self.logger.info('GT subpolicy: %s', self.subpolicy_list)
             else:
                 gt_subpolicy = self.subpolicy_dict[traj_key].pop(0)
-                self.logger.info('GT Subpolicy:', gt_subpolicy)
+                self.logger.info('GT Subpolicy: %s', gt_subpolicy)
                 rgb_image = self.get_panorama_image(env, env.last_event)
                 with torch.no_grad():
                     patch_feat = self.object_model.extract_cnn_features(rgb_image)
                     obj_cls, _, _  = self.object_model.extract_roi_features(rgb_image)
                     recep_cls, _, _ = self.recep_model.extract_roi_features(rgb_image)
                 pred_subpolicy = self.subpolicy_model.predict(inst, traj_data, patch_feat, obj_cls, recep_cls)
+                print(pred_subpolicy)
                 self.subpolicy_list += (pred_subpolicy)
-                self.logger.info('Predicted subpolicy:', self.subpolicy_list)
+                # self.logger.info('Predicted subpolicy: %s', self.subpolicy_list)
 
             meta_dict['gt_subpolicy'] = gt_subpolicy
             meta_dict['pred_subpolicy'] = self.subpolicy_list.copy()
@@ -225,15 +246,31 @@ class Eval_Subpolicy_Agent(object):
             meta_dict['instruction'] = inst
             meta_dict['interaction_instruction'] = self.get_interaction_instruction(inst, traj_data)
 
-            ll_actions = []
             subpolicy_count = 0
             pred_ll_seq = ""
-            while self.subpolicy_list:
+            pred_subpolicy = ""
+            prev_fail = False
+            while self.subpolicy_list and self.err_count < 10:
+                
+                if prev_fail:
+                    rgb_image = self.get_panorama_image(env, env.last_event)
+                    with torch.no_grad():
+                        patch_feat = self.object_model.extract_cnn_features(rgb_image)
+                        obj_cls, _, _  = self.object_model.extract_roi_features(rgb_image)
+                        recep_cls, _, _ = self.recep_model.extract_roi_features(rgb_image)
+                    pred_subpolicy = self.subpolicy_model.predict(inst, traj_data, patch_feat, obj_cls, recep_cls)
+                    print('Repredict subpolicy:', pred_subpolicy)
+                    prev_fail = False
+                    self.subpolicy_list = pred_subpolicy
+                
                 curr_subpolicy = self.subpolicy_list.pop(0)
                 if self.subpolicy_list:
                     next_subpolicy = self.subpolicy_list[0]
                 else:
-                    next_subpolicy = "interaction"
+                    next_subpolicy = 'interaction'
+
+                pred_subpolicy += curr_subpolicy + ' '
+
                 subpolicy_count += 1
                 change_subpolicy = False
                 first_ll_action = True
@@ -241,71 +278,14 @@ class Eval_Subpolicy_Agent(object):
                 while not change_subpolicy and ll_action_count < 30:
                     cv2.imwrite(os.path.join(debug_dir, '%d.png' % len(os.listdir(debug_dir))), env.last_event.frame[:, :, ::-1])
                     err_list = []
-                    if curr_subpolicy == 'turn left':
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateLeft')
-                        err_list.append(err) if err else None
-                        pred_ll_seq += 'l'
-                        change_subpolicy = True
-                    elif curr_subpolicy == 'turn right':
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
-                        err_list.append(err) if err else None
-                        pred_ll_seq += 'r'
-                        change_subpolicy = True
-                    elif curr_subpolicy == 'turn around':
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
-                        err_list.append(err) if err else None
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
-                        err_list.append(err) if err else None
-                        pred_ll_seq += 'rr'
-                        change_subpolicy = True
-                    elif curr_subpolicy == 'step back':
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
-                        err_list.append(err) if err else None
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
-                        err_list.append(err) if err else None
-                        success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
-                        err_list.append(err) if err else None
-                        success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
-                        err_list.append(err) if err else None
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
-                        err_list.append(err) if err else None
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
-                        err_list.append(err) if err else None
-                        pred_ll_seq += 'rrmmrr'
-                        change_subpolicy = True
-                    elif curr_subpolicy == 'step left':
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateLeft')
-                        err_list.append(err) if err else None
-                        success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
-                        err_list.append(err) if err else None
-                        success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
-                        err_list.append(err) if err else None
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
-                        err_list.append(err) if err else None
-                        pred_ll_seq += 'lmmr'
-                        change_subpolicy = True
-                    elif curr_subpolicy == 'step right':
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
-                        err_list.append(err) if err else None
-                        success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
-                        err_list.append(err) if err else None
-                        success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
-                        err_list.append(err) if err else None
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateLeft')
-                        err_list.append(err) if err else None
-                        pred_ll_seq += 'rmml'
-                        change_subpolicy = True
-                    elif curr_subpolicy == 'face left' and first_ll_action:
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateLeft')
-                        err_list.append(err) if err else None
-                        pred_ll_seq += 'l'
+                    if first_ll_action:
+                        actions, errors, pred_ll = self.subpolicy_step(env, curr_subpolicy)
+                        ll_actions += actions
+                        err_list += errors
+                        pred_ll_seq += pred_ll
                         first_ll_action = False
-                    elif curr_subpolicy == 'face right' and first_ll_action:
-                        success, event, target_instance_id, err, _ = env.va_interact('RotateRight')
-                        err_list.append(err) if err else None
-                        pred_ll_seq += 'r'
-                        first_ll_action = False
-
+                        if 'face' not in curr_subpolicy and 'move' not in curr_subpolicy:
+                            change_subpolicy = True
                     else:
                         rgb_image = self.get_panorama_image(env, env.last_event)
                         with torch.no_grad():
@@ -316,27 +296,120 @@ class Eval_Subpolicy_Agent(object):
                         if pred_action == 'Interaction':
                             change_subpolicy = True
                         else:
-                            success, event, target_instance_id, err, _ = env.va_interact('MoveAhead')
+                            success, event, target_instance_id, err, api_action = env.va_interact('MoveAhead')
                             err_list.append(err) if err else None
+                            ll_actions.append(api_action)
                             if err:
                                 change_subpolicy = True
+                                self.logger.info('Error: Agent blocked, subpolicy: %s', curr_subpolicy)
                             pred_ll_seq += 'm'
                             ll_action_count += 1
                             if 'face' in curr_subpolicy and ll_action_count > 1:
-                                change_subpolicy = True
+                                change_subpolicy = True  
 
                     if err_list:
-                        print("Error list:", err_list)
+                        self.err_count += 1
+                        prev_fail = True
+                        # self.logger.info("Error list: %s", err_list)
             
             meta_dict['pred_action'] = pred_ll_seq
             meta_dict['error_list'] = err_list
             json.dump(meta_dict, open(os.path.join(debug_dir, 'meta_{}.json'.format(inst_idx)), 'w'))
-            print('Pred ll seq:', pred_ll_seq)
+            self.logger.info('Predicted subpolicy: %s', pred_subpolicy)
+            self.logger.info('Pred ll seq: %s', pred_ll_seq)
                     
-        return actseq
+        return ll_actions
 
-    def step_and_log(self):
+    def subpolicy_step(self, env, curr_subpolicy):
+        actions = []
+        err_list = []
+        pred_ll_seq = ''
+        if curr_subpolicy == 'turn left':
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateLeft')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            pred_ll_seq += 'l'
+        elif curr_subpolicy == 'turn right':
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateRight')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            pred_ll_seq += 'r'
+        elif curr_subpolicy == 'turn around':
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateRight')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateRight')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            pred_ll_seq += 'rr'
+        elif curr_subpolicy == 'step back':
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateRight')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateRight')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            success, event, target_instance_id, err, api_action = env.va_interact('MoveAhead')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            success, event, target_instance_id, err, api_action = env.va_interact('MoveAhead')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateRight')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateRight')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            pred_ll_seq += 'rrmmrr'
+        elif curr_subpolicy == 'step left':
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateLeft')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            success, event, target_instance_id, err, api_action = env.va_interact('MoveAhead')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            success, event, target_instance_id, err, api_action = env.va_interact('MoveAhead')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateRight')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            pred_ll_seq += 'lmmr'
+        elif curr_subpolicy == 'step right':
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateRight')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            success, event, target_instance_id, err, api_action = env.va_interact('MoveAhead')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            success, event, target_instance_id, err, api_action = env.va_interact('MoveAhead')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateLeft')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            pred_ll_seq += 'rmml'
+        elif curr_subpolicy == 'face left':
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateLeft')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            pred_ll_seq += 'l'
+        elif curr_subpolicy == 'face right':
+            success, event, target_instance_id, err, api_action = env.va_interact('RotateRight')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            pred_ll_seq += 'r'
+        elif curr_subpolicy == 'move forward':
+            success, event, target_instance_id, err, api_action = env.va_interact('MoveAhead')
+            actions.append(api_action)
+            err_list.append(err) if err else None
+            pred_ll_seq += 'm'
 
+        if err_list != []:
+            self.logger.info('Error: Agent blocked, subpolicy: %s', curr_subpolicy)
+
+        return actions, err_list, pred_ll_seq
 
     def get_interaction_instruction(self, instruction, traj_data):
         all_instructions = traj_data['turk_annotations']['anns']
@@ -374,12 +447,13 @@ class Eval_Subpolicy_Agent(object):
 
 
     def do_interaction(self, env, inst, traj_data, inst_idx):
-        debug_dir = os.path.join(self.args.metadata_path, 'output2', traj_data['task_id'])
+        debug_dir = os.path.join(self.args.debug_dir, traj_data['task_id'])
         action_seq = self.inst2action[inst.lower().strip()]
         action_len = len(action_seq)
         last_action = ''
         ll_actions = []
-        self.logger.info('Do interaction:', action_seq)
+        self.logger.info('Do interaction: %s', action_seq)
+
         for i in range(len(action_seq) // 2):
             curr_action = action_seq[i * 2]
             target_object = action_seq[i * 2 + 1]
@@ -396,17 +470,40 @@ class Eval_Subpolicy_Agent(object):
             if success and curr_action == 'OpenObject':
                 self.open_mask = copy.deepcopy(interaction_mask)
             if not success:
-                self.logger.info(target_object, curr_action, err)
+                self.logger.info("%s, %s, %s", target_object, curr_action, err)
+                # self.logger.info("LookDown to find")
+                # # try to rotate horizontal to find the object
+                # _, _, _, _, api_action = env.va_interact('LookDown')
+                # ll_actions.append(api_action)
+                # success, event, target_instance_id, err, api_action = env.va_interact(curr_action, interact_mask=interaction_mask)
+                # if not success:
+                #     self.logger.info("LookUp to find")
+                #     for up_time in range(2):
+                #         _, _, _, _, api_action = env.va_interact('LookUp')
+                #         ll_actions.append(api_action)
+                #     success, event, target_instance_id, err, api_action = env.va_interact(curr_action, interact_mask=interaction_mask)
+                #     if success:
+                #         self.logger.info("LookUp find object")
+                    
+                #     _, _, _, _, api_action = env.va_interact('LookDown')
+                #     ll_actions.append(api_action)
+                # else:
+                #     self.logger.info("LookDown find object")
+                #     _, _, _, _, api_action = env.va_interact('LookUp')
+                #     ll_actions.append(api_action)
+
+                
             if api_action:
                 ll_actions.append(api_action)
             # if not success and (target_object=='Cabinet' or target_object=='Drawer'):
             #    img_idx = len(os.listdir(debug_dir))
+            if not success:
                 cv2.imwrite(os.path.join(debug_dir, '%s_%s_%s_view.png' % (target_object, curr_action, err)), env.last_event.frame[:, :, ::-1])
                 if interaction_mask is None:
                     interaction_mask = np.zeros((300, 300))
                 cv2.imwrite(os.path.join(debug_dir, '%s_%s_%s_mask.png' % (target_object, curr_action, err)), interaction_mask*255)
             last_action = curr_action
-
+        
         return ll_actions
     
     def get_interaction_mask_gt(self, env, object_type):
