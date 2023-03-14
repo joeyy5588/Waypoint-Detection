@@ -248,7 +248,7 @@ class Eval_Subpolicy_Agent(object):
 
             subpolicy_count = 0
             pred_ll_seq = ""
-            pred_subpolicy = ""
+            pred_subpolicy_seq = ""
             prev_fail = False
             while self.subpolicy_list and self.err_count < 10:
                 
@@ -259,9 +259,10 @@ class Eval_Subpolicy_Agent(object):
                         obj_cls, _, _  = self.object_model.extract_roi_features(rgb_image)
                         recep_cls, _, _ = self.recep_model.extract_roi_features(rgb_image)
                     pred_subpolicy = self.subpolicy_model.predict(inst, traj_data, patch_feat, obj_cls, recep_cls)
-                    print('Repredict subpolicy:', pred_subpolicy)
                     prev_fail = False
-                    self.subpolicy_list = pred_subpolicy
+                    self.subpolicy_list = []
+                    self.subpolicy_list += (pred_subpolicy)
+                    print('Repredict subpolicy:', pred_subpolicy)
                 
                 curr_subpolicy = self.subpolicy_list.pop(0)
                 if self.subpolicy_list:
@@ -269,7 +270,7 @@ class Eval_Subpolicy_Agent(object):
                 else:
                     next_subpolicy = 'interaction'
 
-                pred_subpolicy += curr_subpolicy + ' '
+                pred_subpolicy_seq += curr_subpolicy + ' '
 
                 subpolicy_count += 1
                 change_subpolicy = False
@@ -315,7 +316,7 @@ class Eval_Subpolicy_Agent(object):
             meta_dict['pred_action'] = pred_ll_seq
             meta_dict['error_list'] = err_list
             json.dump(meta_dict, open(os.path.join(debug_dir, 'meta_{}.json'.format(inst_idx)), 'w'))
-            self.logger.info('Predicted subpolicy: %s', pred_subpolicy)
+            self.logger.info('Predicted subpolicy: %s', pred_subpolicy_seq)
             self.logger.info('Pred ll seq: %s', pred_ll_seq)
                     
         return ll_actions
