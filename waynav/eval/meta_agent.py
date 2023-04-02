@@ -37,7 +37,7 @@ class Eval_Subpolicy_Agent(object):
         self.use_gt_nav = False
         # self.use_gt_lang = True
         self.use_gt_mask = False
-        self.use_gt_subpolicy = False
+        self.use_gt_subpolicy = True
         self.traj_list = []
         self.subpolicy_list = []
         self.err_count = 0
@@ -137,9 +137,9 @@ class Eval_Subpolicy_Agent(object):
                 else:
                     falied_list.append(trial_fn)
 
-                # finished_jsons = {'finished': finished_list, 'success': success_list, 'failed': falied_list}
-                # cache_file = os.path.join(self.args.save_path, "cache.json")
-                # json.dump(finished_jsons, open(cache_file, 'w+'))
+                finished_jsons = {'finished': finished_list, 'success': success_list, 'failed': falied_list}
+                cache_file = os.path.join(self.args.save_path, "cache.json")
+                json.dump(finished_jsons, open(cache_file, 'w+'))
 
             except Exception as e:
                 import traceback
@@ -236,7 +236,7 @@ class Eval_Subpolicy_Agent(object):
                     obj_cls, _, _  = self.object_model.extract_roi_features(rgb_image)
                     recep_cls, _, _ = self.recep_model.extract_roi_features(rgb_image)
                 pred_subpolicy = self.subpolicy_model.predict(inst, traj_data, patch_feat, obj_cls, recep_cls)
-                print(pred_subpolicy)
+                self.logger.info('Predicted subpolicy: %s' % pred_subpolicy)
                 self.subpolicy_list += (pred_subpolicy)
                 # self.logger.info('Predicted subpolicy: %s', self.subpolicy_list)
 
@@ -250,19 +250,20 @@ class Eval_Subpolicy_Agent(object):
             pred_ll_seq = ""
             pred_subpolicy_seq = ""
             prev_fail = False
+            err_list = []
             while self.subpolicy_list and self.err_count < 10:
                 
-                if prev_fail:
-                    rgb_image = self.get_panorama_image(env, env.last_event)
-                    with torch.no_grad():
-                        patch_feat = self.object_model.extract_cnn_features(rgb_image)
-                        obj_cls, _, _  = self.object_model.extract_roi_features(rgb_image)
-                        recep_cls, _, _ = self.recep_model.extract_roi_features(rgb_image)
-                    pred_subpolicy = self.subpolicy_model.predict(inst, traj_data, patch_feat, obj_cls, recep_cls)
-                    prev_fail = False
-                    self.subpolicy_list = []
-                    self.subpolicy_list += (pred_subpolicy)
-                    print('Repredict subpolicy:', pred_subpolicy)
+                # if prev_fail:
+                #     rgb_image = self.get_panorama_image(env, env.last_event)
+                #     with torch.no_grad():
+                #         patch_feat = self.object_model.extract_cnn_features(rgb_image)
+                #         obj_cls, _, _  = self.object_model.extract_roi_features(rgb_image)
+                #         recep_cls, _, _ = self.recep_model.extract_roi_features(rgb_image)
+                #     pred_subpolicy = self.subpolicy_model.predict(inst, traj_data, patch_feat, obj_cls, recep_cls)
+                #     prev_fail = False
+                #     self.subpolicy_list = []
+                #     self.subpolicy_list += (pred_subpolicy)
+                #     print('Repredict subpolicy:', pred_subpolicy)
                 
                 curr_subpolicy = self.subpolicy_list.pop(0)
                 if self.subpolicy_list:
@@ -276,6 +277,7 @@ class Eval_Subpolicy_Agent(object):
                 change_subpolicy = False
                 first_ll_action = True
                 ll_action_count = 0
+                err_list = []
                 while not change_subpolicy and ll_action_count < 30:
                     cv2.imwrite(os.path.join(debug_dir, '%d.png' % len(os.listdir(debug_dir))), env.last_event.frame[:, :, ::-1])
                     err_list = []
@@ -428,24 +430,6 @@ class Eval_Subpolicy_Agent(object):
                 break
 
         return interaction_instruction
-
-    def get_interaction_instruction(self, instruction, traj_data):
-        all_instructions = traj_data['turk_annotations']['anns']
-        instruction_ridx = 0
-        instruction_high_idx = 0
-        for i in range(len(all_instructions)):
-            if instruction in all_instructions[i]['high_descs']:
-                instruction_ridx = i
-                instruction_high_idx = all_instructions[i]['high_descs'].index(instruction)
-                break
-
-        for i in range(instruction_high_idx, len(all_instructions[instruction_ridx]['high_descs'])):
-            if self.inst2type[all_instructions[instruction_ridx]['high_descs'][i].lower().strip()] == 'interaction':
-                interaction_instruction = all_instructions[instruction_ridx]['high_descs'][i]
-                break
-
-        return interaction_instruction
-
 
     def do_interaction(self, env, inst, traj_data, inst_idx):
         debug_dir = os.path.join(self.args.debug_dir, traj_data['task_id'])
